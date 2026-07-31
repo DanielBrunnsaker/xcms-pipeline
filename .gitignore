@@ -2,3 +2,8 @@
 .RData
 .Rproj.user/
 .DS_Store
+
+# Raw MS data and pipeline output are large and machine-specific; keep only
+# code and (optionally) reviewed sample sheets under version control.
+data/*/raw/
+data/*/output/
