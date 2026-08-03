@@ -24,7 +24,7 @@
 # calls elsewhere are unaffected — they ran fine under SnowParam already,
 # and explicitly pass their own BPPARAM (bp_workers() in R/parallel.R),
 # overriding this default regardless of what's registered here.
-BiocParallel::register(BiocParallel::SerialParam())
+BiocParallel::register(BiocParallel::SerialParam(progressbar = TRUE))
 
 #' Pick a small representative subset of files to run parameter optimization
 #' on.
