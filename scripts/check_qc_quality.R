@@ -39,6 +39,7 @@
 source("R/sample_sheet.R")
 source("R/spectrum_mode.R")
 source("R/instrument_params.R")
+source("R/parallel.R")
 source("R/qc_quality.R")
 
 args <- commandArgs(trailingOnly = TRUE)

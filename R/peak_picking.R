@@ -10,13 +10,19 @@
 #
 # IPO2's own internal parameter-scoring loop calls BiocParallel::bplapply()
 # without specifying a backend, so it uses whatever the default registered
-# one is — typically MulticoreParam (fork-based) on macOS/Linux, which hits
-# a known BiocParallel bug ("wrong args for environment subassignment",
-# https://github.com/Bioconductor/BiocParallel/issues/206) that fails every
-# worker in a batch identically. Registering SerialParam as the default here
-# avoids that broken path; it doesn't affect our own findChromPeaks() calls
-# elsewhere, since those already explicitly pass their own SerialParam.
-BiocParallel::register(BiocParallel::SerialParam())
+# one is. MulticoreParam (fork-based) hit a known BiocParallel bug here
+# ("wrong args for environment subassignment",
+# https://github.com/Bioconductor/BiocParallel/issues/206) that failed every
+# worker in a batch identically — and fork() doesn't exist on Windows
+# anyway, so MulticoreParam would silently degrade to single-core there
+# regardless. Registering SnowParam (real separate processes over local
+# sockets, not fork-based) as the default instead — genuinely untested
+# against IPO2's loop, so if this reintroduces a similar failure, drop back
+# to BiocParallel::SerialParam() here. Our own findChromPeaks()/
+# adjustRtime()/groupChromPeaks()/fillChromPeaks() calls elsewhere are
+# unaffected either way — they explicitly pass their own BPPARAM (see
+# bp_workers() in R/parallel.R), which overrides this default.
+BiocParallel::register(BiocParallel::SnowParam(workers = default_worker_count(), progressbar = TRUE))
 
 #' Pick a small representative subset of files to run parameter optimization
 #' on.
@@ -34,11 +40,18 @@ BiocParallel::register(BiocParallel::SerialParam())
 #'      the optimizer's reproducibility-based scoring, so this is a last
 #'      resort.
 #'
-#' Picks are spread evenly across `injection_order` (time) rather than just
-#' taking the first `n` rows — a group can span many batches (e.g. in
-#' "global" IPO scope), and the sheet is sorted by batch, so naively taking
-#' the first `n` QC rows would only ever sample the earliest batch instead
-#' of being representative of the whole group.
+#' If the candidate rows span multiple batches (as in "global" IPO scope,
+#' which can cover up to a few dozen batches), one representative file is
+#' picked per batch instead — otherwise batch-to-batch drift in
+#' chromatography/instrument conditions would be invisible to the
+#' optimizer, since only whichever batches happen to fall in an
+#' evenly-time-spaced sample of `n` files would ever be represented at all.
+#' If there are more batches than `n`, the batches themselves are
+#' subsampled evenly first, so coverage stays spread across the whole
+#' timespan rather than favoring earlier/later batches. Within a single
+#' batch (as in "batch" IPO scope, where this is always called per-batch),
+#' picks are instead spread evenly across `injection_order` (time) within
+#' that batch, same as before.
 #'
 #' QC rows flagged as faulty by `scripts/check_qc_quality.R` (a `qc_flagged`
 #' column with value `TRUE`) are excluded from consideration entirely — a
@@ -47,14 +60,31 @@ BiocParallel::register(BiocParallel::SerialParam())
 #' every QC row is treated as usable.
 #'
 #' @param group_sheet Sample sheet rows for a single column x polarity group.
-#' @param n Number of files to select.
+#' @param n Number of files to select (or, when multiple batches are
+#'   present, the max number of batches to draw one file from each).
 #' @param min_qc Minimum number of QC rows required before they're considered
 #'   "enough" to use (below this, fall through to the next tier).
 select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
-  pick_spread <- function(rows, n) {
+  pick_representative <- function(rows, n) {
     rows <- rows[order(rows$injection_order), ]
-    idx <- unique(round(seq(1, nrow(rows), length.out = n)))
-    rows$filepath[idx]
+    batches <- unique(rows$batch)
+
+    if (length(batches) <= 1) {
+      n <- min(n, nrow(rows))
+      idx <- unique(round(seq(1, nrow(rows), length.out = n)))
+      return(rows$filepath[idx])
+    }
+
+    if (length(batches) > n) {
+      batch_idx <- unique(round(seq(1, length(batches), length.out = n)))
+      batches <- batches[batch_idx]
+    }
+
+    vapply(batches, function(b) {
+      batch_rows <- rows[rows$batch == b, ]
+      mid <- round((nrow(batch_rows) + 1) / 2)
+      batch_rows$filepath[mid]
+    }, character(1))
   }
 
   if (!"qc_flagged" %in% names(group_sheet)) {
@@ -65,17 +95,32 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 
   sqc_rows <- group_sheet[group_sheet$sample_type == "sQC", , drop = FALSE]
   if (nrow(sqc_rows) >= min_qc) {
-    return(pick_spread(sqc_rows, min(n, nrow(sqc_rows))))
+    return(pick_representative(sqc_rows, n))
   }
 
   ltqc_rows <- group_sheet[group_sheet$sample_type == "ltQC", , drop = FALSE]
   if (nrow(ltqc_rows) >= min_qc) {
-    return(pick_spread(ltqc_rows, min(n, nrow(ltqc_rows))))
+    return(pick_representative(ltqc_rows, n))
   }
 
   regular_rows <- group_sheet[group_sheet$sample_type == "Sample", , drop = FALSE]
-  n <- min(n, nrow(regular_rows))
-  regular_rows$filepath[sample(nrow(regular_rows), n)]
+  n_regular <- min(n, nrow(regular_rows))
+  subset_files <- regular_rows$filepath[sample(nrow(regular_rows), n_regular)]
+
+  if (length(subset_files) == 0) {
+    batches <- unique(group_sheet$batch)
+    batch_desc <- if (length(batches) == 1) sprintf("batch: %s, ", batches) else ""
+    stop(sprintf(
+      paste(
+        "No usable files for IPO optimization (%scolumn: %s, polarity: %s)",
+        "— every QC is flagged/absent and there are no regular samples either.",
+        "Review qc_flagged in the sample sheet, or exclude this batch."
+      ),
+      batch_desc, group_sheet$column[1], group_sheet$polarity[1]
+    ), call. = FALSE)
+  }
+
+  subset_files
 }
 
 #' Run IPO2 optimization for one column x polarity group, caching the result
@@ -88,8 +133,14 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #'
 #' @param group_sheet Sample sheet rows for this group.
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
+#' @param ipo_subset_size Passed to `select_ipo_subset()` as `n` — number of
+#'   files (or, when the group spans multiple batches, number of batches to
+#'   draw one file from each) used for the optimization search. Larger
+#'   values give better batch coverage in "global" scope but multiply
+#'   IPO2's per-trial cost, which matters since IPO2's own loop runs
+#'   serially in this environment (see the top of this file).
 #' @return An xcms::CentWaveParam with the optimized settings.
-run_ipo_optimization <- function(group_sheet, out_dir) {
+run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   params_path <- file.path(out_dir, "ipo_params.rds")
 
   if (file.exists(params_path)) {
@@ -97,7 +148,7 @@ run_ipo_optimization <- function(group_sheet, out_dir) {
     return(readRDS(params_path))
   }
 
-  subset_files <- select_ipo_subset(group_sheet)
+  subset_files <- select_ipo_subset(group_sheet, n = ipo_subset_size)
   message(sprintf(
     "Running IPO2 optimization on %d file(s):\n  %s",
     length(subset_files), paste(subset_files, collapse = "\n  ")
@@ -165,10 +216,7 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
   raw_data <- read_raw_data(filepaths, spectrum_modes)
 
   message("Running findChromPeaks()...")
-  xcms::findChromPeaks(
-    raw_data, param = centwave_param,
-    BPPARAM = BiocParallel::SerialParam(progressbar = TRUE)
-  )
+  xcms::findChromPeaks(raw_data, param = centwave_param, BPPARAM = bp_workers())
 }
 
 #' Align retention times, group peaks into cross-sample features, and fill
@@ -191,15 +239,15 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
 #' @return The aligned, corresponded, gap-filled XCMSnExp.
 align_and_correspond <- function(xdata, sample_types) {
   message("Running adjustRtime()...")
-  xdata <- xcms::adjustRtime(xdata, param = xcms::ObiwarpParam())
+  xdata <- xcms::adjustRtime(xdata, param = xcms::ObiwarpParam(), BPPARAM = bp_workers())
 
   message("Running groupChromPeaks()...")
   xdata <- xcms::groupChromPeaks(
-    xdata, param = xcms::PeakDensityParam(sampleGroups = sample_types)
+    xdata, param = xcms::PeakDensityParam(sampleGroups = sample_types), BPPARAM = bp_workers()
   )
 
   message("Running fillChromPeaks()...")
-  xcms::fillChromPeaks(xdata, param = xcms::ChromPeakAreaParam())
+  xcms::fillChromPeaks(xdata, param = xcms::ChromPeakAreaParam(), BPPARAM = bp_workers())
 }
 
 #' Combine an aligned XCMSnExp's feature definitions and per-sample values

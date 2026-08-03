@@ -64,17 +64,14 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5) {
   tic <- tic[order(as.integer(names(tic)))]
 
   message("Running default-parameters findChromPeaks() for quality check...")
-  xdata <- xcms::findChromPeaks(
-    raw_data, param = xcms::CentWaveParam(),
-    BPPARAM = BiocParallel::SerialParam(progressbar = TRUE)
-  )
+  xdata <- xcms::findChromPeaks(raw_data, param = xcms::CentWaveParam(), BPPARAM = bp_workers())
 
   message("Running adjustRtime()...")
-  xdata <- xcms::adjustRtime(xdata, param = xcms::ObiwarpParam())
+  xdata <- xcms::adjustRtime(xdata, param = xcms::ObiwarpParam(), BPPARAM = bp_workers())
 
   xdata <- xcms::groupChromPeaks(
     xdata,
-    param = xcms::PeakDensityParam(sampleGroups = qc_sheet$sample_type)
+    param = xcms::PeakDensityParam(sampleGroups = qc_sheet$sample_type), BPPARAM = bp_workers()
   )
 
   feature_vals <- xcms::featureValues(xdata, value = "into")

@@ -6,7 +6,7 @@
 # correction, or clustering (that's a separate later stage).
 #
 # Usage:
-#   Rscript scripts/run_peak_picking.R <folder> [ipo_scope]
+#   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size]
 #
 # <folder> is the same folder you pointed generate_sample_sheet.R at (or any
 # folder containing a metadata/sample_sheet.xlsx you curated by hand — either
@@ -26,6 +26,15 @@
 #     alignment/correspondence — there's always exactly one aligned feature
 #     table per group, regardless of scope.
 #
+# [ipo_subset_size] (default 4) controls how many files IPO2 optimizes
+# against (select_ipo_subset() in R/peak_picking.R). In "global" scope, if
+# the group spans multiple batches, this instead becomes the max number of
+# batches to draw one representative file from each — so every batch's
+# chromatography/instrument conditions can inform the optimization rather
+# than only whichever few happen to fall in a small evenly-spaced sample.
+# Raising it improves batch coverage but multiplies IPO2's per-trial cost,
+# which matters since IPO2's own loop runs serially in this environment.
+#
 # Output per group, under <folder>/output/<column>_<polarity>/:
 #   - peaks/xdata.rds        full aligned XCMSnExp object
 #   - peaks/peak_table.csv   flat per-peak table (includes gap-filled peaks)
@@ -35,17 +44,25 @@
 source("R/sample_sheet.R")
 source("R/spectrum_mode.R")
 source("R/instrument_params.R")
+source("R/parallel.R")
 source("R/peak_picking.R")
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1) {
-  stop("Usage: Rscript scripts/run_peak_picking.R <folder> [ipo_scope: global|batch]", call. = FALSE)
+  stop(
+    "Usage: Rscript scripts/run_peak_picking.R <folder> [ipo_scope: global|batch] [ipo_subset_size]",
+    call. = FALSE
+  )
 }
 folder <- args[1]
 ipo_scope <- if (length(args) >= 2) args[2] else "global"
+ipo_subset_size <- if (length(args) >= 3) as.integer(args[3]) else 4
 
 if (!ipo_scope %in% c("global", "batch")) {
   stop('ipo_scope must be "global" or "batch"', call. = FALSE)
+}
+if (is.na(ipo_subset_size) || ipo_subset_size < 1) {
+  stop("ipo_subset_size must be a positive integer", call. = FALSE)
 }
 
 sheet_path <- file.path(folder, "metadata", "sample_sheet.xlsx")
@@ -61,7 +78,7 @@ if (!file.exists(sheet_path)) {
 sample_sheet <- as.data.frame(readxl::read_excel(sheet_path))
 validate_sample_sheet(sample_sheet)
 
-message(sprintf("IPO optimization scope: %s\n", ipo_scope))
+message(sprintf("IPO optimization scope: %s, subset size: %d\n", ipo_scope, ipo_subset_size))
 
 groups <- split(sample_sheet, paste(sample_sheet$column, sample_sheet$polarity, sep = "_"))
 
@@ -81,7 +98,7 @@ for (group_name in names(groups)) {
       ))
 
       batch_out_dir <- file.path(out_dir, batch_name)
-      centwave_param <- run_ipo_optimization(batch_sheet, batch_out_dir)
+      centwave_param <- run_ipo_optimization(batch_sheet, batch_out_dir, ipo_subset_size)
       picked_list[[batch_name]] <- pick_peaks(
         batch_sheet$filepath, centwave_param, get_spectrum_modes(batch_sheet)
       )
@@ -94,7 +111,7 @@ for (group_name in names(groups)) {
       "\n=== Processing group: %s (%d files) ===", group_name, nrow(group_sheet)
     ))
 
-    centwave_param <- run_ipo_optimization(group_sheet, out_dir)
+    centwave_param <- run_ipo_optimization(group_sheet, out_dir, ipo_subset_size)
     xdata <- pick_peaks(group_sheet$filepath, centwave_param, get_spectrum_modes(group_sheet))
     ordered_sheet <- group_sheet
   }
