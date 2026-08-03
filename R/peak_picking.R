@@ -14,13 +14,17 @@
 #   BiocParallel/issues/206), failing every worker in a batch identically.
 # - fork() doesn't exist on Windows anyway, so MulticoreParam would degrade
 #   to single-core there regardless.
-# - Registering SnowParam (separate processes over local sockets) instead —
-#   untested against IPO2's loop; if it reintroduces a similar failure, drop
-#   back to BiocParallel::SerialParam() here.
+# - SnowParam (separate processes over local sockets) was tried next, but
+#   hangs indefinitely for IPO2's loop specifically under Docker/WSL2 on
+#   Windows (workers spawn fine, CPU stays busy, but nothing ever reports
+#   back — a socket-communication hang, not an error, so nothing here can
+#   catch or recover from it). Back to SerialParam: proven stable, just
+#   slower.
 # Our own findChromPeaks()/adjustRtime()/groupChromPeaks()/fillChromPeaks()
-# calls elsewhere are unaffected either way — they explicitly pass their own
-# BPPARAM (bp_workers() in R/parallel.R), overriding this default.
-BiocParallel::register(BiocParallel::SnowParam(workers = default_worker_count(), progressbar = TRUE))
+# calls elsewhere are unaffected — they ran fine under SnowParam already,
+# and explicitly pass their own BPPARAM (bp_workers() in R/parallel.R),
+# overriding this default regardless of what's registered here.
+BiocParallel::register(BiocParallel::SerialParam())
 
 #' Pick a small representative subset of files to run parameter optimization
 #' on.

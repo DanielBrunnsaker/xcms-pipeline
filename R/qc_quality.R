@@ -229,9 +229,7 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
   plotly::layout(
     p,
     title = title,
-    xaxis = list(
-      title = "", tickangle = -45, type = "category", tickvals = x_keys, ticktext = labels
-    ),
+    xaxis = list(title = "", type = "category", showticklabels = FALSE),
     yaxis = list(title = ylab),
     shapes = list(list(
       type = "line", x0 = 0, x1 = 1, xref = "paper",
