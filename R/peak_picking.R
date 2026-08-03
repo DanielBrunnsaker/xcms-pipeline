@@ -202,7 +202,7 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
   raw_data <- read_raw_data(filepaths, spectrum_modes)
 
   message("Running findChromPeaks()...")
-  xcms::findChromPeaks(raw_data, param = centwave_param, BPPARAM = bp_workers())
+  with_bp_workers(xcms::findChromPeaks, raw_data, param = centwave_param)
 }
 
 #' Turns individually-picked peaks into one aligned feature table: aligns
@@ -225,15 +225,15 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
 #' @return The aligned, corresponded, gap-filled XCMSnExp.
 align_and_correspond <- function(xdata, sample_types) {
   message("Running adjustRtime()...")
-  xdata <- xcms::adjustRtime(xdata, param = xcms::ObiwarpParam(), BPPARAM = bp_workers())
+  xdata <- with_bp_workers(xcms::adjustRtime, xdata, param = xcms::ObiwarpParam())
 
   message("Running groupChromPeaks()...")
-  xdata <- xcms::groupChromPeaks(
-    xdata, param = xcms::PeakDensityParam(sampleGroups = sample_types), BPPARAM = bp_workers()
+  xdata <- with_bp_workers(
+    xcms::groupChromPeaks, xdata, param = xcms::PeakDensityParam(sampleGroups = sample_types)
   )
 
   message("Running fillChromPeaks()...")
-  xcms::fillChromPeaks(xdata, param = xcms::ChromPeakAreaParam(), BPPARAM = bp_workers())
+  with_bp_workers(xcms::fillChromPeaks, xdata, param = xcms::ChromPeakAreaParam())
 }
 
 #' Combine an aligned XCMSnExp's feature definitions and per-sample values

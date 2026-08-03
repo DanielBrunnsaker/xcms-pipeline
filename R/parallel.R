@@ -42,3 +42,31 @@ default_worker_count <- function(headroom = 2) {
 bp_workers <- function() {
   BiocParallel::SnowParam(workers = default_worker_count(), progressbar = TRUE)
 }
+
+#' Call an xcms function with `BPPARAM = bp_workers()`, falling back to
+#' calling it without BPPARAM if that specific method doesn't accept one.
+#' Some xcms methods in this environment's Bioconductor devel snapshot
+#' don't expose a BPPARAM argument even where the documented xcms API
+#' usually does (confirmed for adjustRtime's ObiwarpParam method — "unused
+#' argument (BPPARAM = ...)" at runtime, despite docs saying otherwise).
+#' Rather than hardcode which ones do, this adapts at call time.
+#'
+#' @param fn The xcms function to call (e.g. xcms::adjustRtime).
+#' @param ... Arguments to pass (not including BPPARAM).
+with_bp_workers <- function(fn, ...) {
+  tryCatch(
+    fn(..., BPPARAM = bp_workers()),
+    error = function(e) {
+      msg <- conditionMessage(e)
+      if (grepl("unused argument", msg, fixed = TRUE) && grepl("BPPARAM", msg, fixed = TRUE)) {
+        warning(
+          "This xcms call doesn't accept BPPARAM in this environment; running without it (single-threaded).",
+          call. = FALSE
+        )
+        fn(...)
+      } else {
+        stop(e)
+      }
+    }
+  )
+}
