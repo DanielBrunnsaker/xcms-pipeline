@@ -40,10 +40,15 @@ BiocParallel::register(BiocParallel::SerialParam(progressbar = TRUE))
 #'    optimizer's reproducibility-based scoring. Last resort.
 #'
 #' Batch handling:
-#' - Multiple batches present (e.g. "global" scope): one representative
-#'   file per batch, so batch-to-batch drift isn't invisible to the
-#'   optimizer. If there are more batches than `n`, batches themselves are
-#'   subsampled evenly across the timespan.
+#' - More batches than `n` (e.g. "global" scope with many batches): the
+#'   batches themselves are subsampled evenly across the timespan, one
+#'   file from each selected batch.
+#' - Fewer (or equal) batches than `n`: `n` is distributed as evenly as
+#'   possible across all batches (at least 1 each, more if `n` allows),
+#'   each batch's own picks spread across its own injection timing — so a
+#'   low batch count never silently hands the optimizer fewer files than
+#'   requested (a handful of batches with only 1 file apiece gives IPO2
+#'   very little to work with for its reproducibility-based scoring).
 #' - Single batch (e.g. "batch" scope): picks spread evenly across
 #'   `injection_order` within that batch, as before.
 #'
@@ -57,26 +62,45 @@ BiocParallel::register(BiocParallel::SerialParam(progressbar = TRUE))
 #' @param min_qc Minimum number of QC rows required before they're considered
 #'   "enough" to use (below this, fall through to the next tier).
 select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
+  pick_spread <- function(rows, k) {
+    k <- min(k, nrow(rows))
+    idx <- unique(round(seq(1, nrow(rows), length.out = k)))
+    rows$filepath[idx]
+  }
+
   pick_representative <- function(rows, n) {
     rows <- rows[order(rows$injection_order), ]
     batches <- unique(rows$batch)
 
     if (length(batches) <= 1) {
-      n <- min(n, nrow(rows))
-      idx <- unique(round(seq(1, nrow(rows), length.out = n)))
-      return(rows$filepath[idx])
+      return(pick_spread(rows, n))
     }
 
     if (length(batches) > n) {
+      # More batches than requested files: subsample the batches
+      # themselves, evenly across the timespan, one file from each.
       batch_idx <- unique(round(seq(1, length(batches), length.out = n)))
       batches <- batches[batch_idx]
+      return(vapply(batches, function(b) {
+        batch_rows <- rows[rows$batch == b, ]
+        mid <- round((nrow(batch_rows) + 1) / 2)
+        batch_rows$filepath[mid]
+      }, character(1)))
     }
 
-    vapply(batches, function(b) {
-      batch_rows <- rows[rows$batch == b, ]
-      mid <- round((nrow(batch_rows) + 1) / 2)
-      batch_rows$filepath[mid]
-    }, character(1))
+    # Fewer (or equal) batches than requested files: distribute n across
+    # all batches as evenly as possible, each batch's share spread across
+    # its own timeline.
+    per_batch_n <- rep(n %/% length(batches), length(batches))
+    remainder <- n %% length(batches)
+    if (remainder > 0) {
+      per_batch_n[seq_len(remainder)] <- per_batch_n[seq_len(remainder)] + 1
+    }
+    names(per_batch_n) <- batches
+
+    unlist(lapply(batches, function(b) {
+      pick_spread(rows[rows$batch == b, ], per_batch_n[[b]])
+    }), use.names = FALSE)
   }
 
   if (!"qc_flagged" %in% names(group_sheet)) {
