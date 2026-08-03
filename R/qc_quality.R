@@ -204,8 +204,15 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
   status <- ifelse(flagged, sprintf("Flagged (%s)", reasons), "Passed")
   hover <- sprintf("%s<br>Batch: %s<br>%s: %.4g<br>%s", labels, batches, ylab, values, status)
 
+  # sample_label is only guaranteed unique *within* a batch — this chart
+  # pools QC files across every batch in the group, so the same label can
+  # legitimately repeat across batches. Use batch+label as the underlying
+  # x-axis key (guaranteed unique) but display just the plain label as
+  # tick text.
+  x_keys <- paste(batches, labels, sep = " / ")
+
   p <- plotly::plot_ly(
-    x = factor(labels, levels = labels), y = values, type = "bar",
+    x = factor(x_keys, levels = x_keys), y = values, type = "bar",
     marker = list(color = bar_colors, line = list(width = 0)),
     text = hover, hoverinfo = "text", showlegend = FALSE
   )
@@ -213,7 +220,7 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
   # Invisible dummy traces just to populate a clickable batch-color legend.
   for (b in unique_batches) {
     p <- plotly::add_trace(
-      p, x = labels[1], y = 0, type = "bar", name = b,
+      p, x = x_keys[1], y = 0, type = "bar", name = b,
       marker = list(color = to_rgba(batch_colors[[b]], 1)),
       visible = "legendonly", hoverinfo = "skip", showlegend = TRUE
     )
@@ -222,7 +229,9 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
   plotly::layout(
     p,
     title = title,
-    xaxis = list(title = "", tickangle = -45, type = "category"),
+    xaxis = list(
+      title = "", tickangle = -45, type = "category", tickvals = x_keys, ticktext = labels
+    ),
     yaxis = list(title = ylab),
     shapes = list(list(
       type = "line", x0 = 0, x1 = 1, xref = "paper",
