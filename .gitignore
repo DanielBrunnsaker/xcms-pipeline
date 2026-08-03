@@ -3,7 +3,8 @@
 .Rproj.user/
 .DS_Store
 
-# Raw MS data and pipeline output are large and machine-specific; keep only
-# code and (optionally) reviewed sample sheets under version control.
-data/*/raw/
-data/*/output/
+# Pipeline runs point at a folder anywhere on disk, but if one is ever
+# nested inside this repo for local testing, don't commit the large,
+# machine-specific raw data or generated output.
+**/raw/
+**/output/

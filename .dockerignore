@@ -1,0 +1,8 @@
+.git
+renv/library
+renv/staging
+renv/sandbox
+data
+*.Rhistory
+.Rproj.user
+.DS_Store
