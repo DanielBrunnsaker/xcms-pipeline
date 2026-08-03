@@ -1,20 +1,17 @@
 # Instrument/method-specific CentWave starting values and IPO2 search-space
-# bounds, keyed by instrument x column x polarity. Edit this file to add or
-# tune entries — it's kept separate from the optimization/peak-picking logic
-# in R/peak_picking.R so instrument-specific numbers can be maintained
-# without touching pipeline code.
-#
-# Falls back to IPO2's own defaults (see run_ipo_optimization() in
-# R/peak_picking.R) for any (instrument, column, polarity) combo not listed
-# here — fill in SynaptXS (or add other instruments) as you tune them.
+# bounds, keyed by instrument x column x polarity.
+# - Edit this file to add/tune entries; kept separate from R/peak_picking.R
+#   so instrument-specific numbers don't mix with pipeline logic.
+# - Falls back to IPO2's own defaults for any combo not listed here — fill
+#   in SynaptXS (or other instruments) as you tune them.
 #
 # Each entry:
-#   starting_values: ppm, peakwidth (c(min, max)), snthresh, prefilter
-#     (c(k, int)), mzdiff, noise — fixed (not optimized) CentWave settings.
-#   bounds: min_peakwidth, max_peakwidth, mzdiff, ppm — each c(lower, upper),
-#     the IPO2 search-space range for that parameter.
-#   int_threshold: absolute intensity threshold for the instrument (not used
-#     by this pipeline yet — kept for the later filtering stage).
+# - starting_values: ppm, peakwidth (c(min, max)), snthresh,
+#   prefilter (c(k, int)), mzdiff, noise — fixed (not optimized) settings.
+# - bounds: min_peakwidth, max_peakwidth, mzdiff, ppm — each
+#   c(lower, upper), the IPO2 search-space range for that parameter.
+# - int_threshold: absolute intensity floor for the instrument (not used
+#   by this pipeline yet — kept for the later filtering stage).
 
 INSTRUMENT_PARAMS <- list(
   MRT = list(
@@ -66,10 +63,8 @@ INSTRUMENT_PARAMS <- list(
   )
 )
 
-#' Get the `instrument` value for a group, if the sheet has that column and
-#' it's actually filled in. Returns NA otherwise, so callers fall back to
-#' generic behavior (e.g. IPO2's own defaults, or a relative QC threshold)
-#' rather than erroring.
+#' Get the `instrument` value for a group (NA if the column is missing or
+#' unfilled, so callers fall back to generic behavior instead of erroring).
 #'
 #' @param sheet Sample sheet rows for a group.
 group_instrument <- function(sheet) {
@@ -80,14 +75,12 @@ group_instrument <- function(sheet) {
   if (length(values) == 0) NA_character_ else values[1]
 }
 
-#' Look up instrument/method-specific centWave config for a given
+#' Look up instrument/method-specific centWave config for an
 #' instrument x column x polarity combo.
-#'
-#' Falls through to a column-level entry (no polarity split) if a
-#' polarity-specific one doesn't exist, matching how HILIC is configured
-#' above for MRT. Returns NULL if nothing is configured for this combo (or
-#' `instrument` is NA/unrecognized), signaling the caller to fall back to
-#' generic behavior (e.g. IPO2's own defaults, or a relative QC threshold).
+#' - Falls through to a column-level entry (no polarity split) if no
+#'   polarity-specific one exists (matches how HILIC is set up for MRT).
+#' - Returns NULL if nothing is configured (or `instrument` is
+#'   NA/unrecognized) — caller falls back to generic behavior.
 #'
 #' @param instrument Instrument name (e.g. "MRT"), or NA.
 #' @param column Chromatography column (e.g. "RP", "HILIC").

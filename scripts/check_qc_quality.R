@@ -1,40 +1,32 @@
 # Standalone QC quality check: flags likely-faulty QC injections (missed
 # injections, empty vials, degraded runs) via a quick default-parameters
 # peak-picking pass, using TIC and aligned feature count vs. their group's
-# peers. Run this after reviewing the sample sheet and before
-# run_peak_picking.R, so a bad QC never gets picked as the "representative"
-# QC for IPO2 optimization.
+# peers. Run after reviewing the sample sheet, before run_peak_picking.R —
+# so a bad QC never gets picked as the "representative" QC for IPO2.
 #
 # Usage:
 #   Rscript scripts/check_qc_quality.R <folder> [include_ltqc]
 #
-# Reads <folder>/metadata/sample_sheet.xlsx and checks sQC + ltQC files
-# together (pooled) within each column x polarity group, unless
-# [include_ltqc] is "false" (defaults to "true"). Pooling is deliberate: if
-# the majority of one QC type is actually faulty (seen in practice), a
-# median/MAD computed from that type alone is corrupted — both have a 50%
-# breakdown point, so once more than half a population is bad, "normal"
-# stops meaning anything. Pooling with the other QC type gives the
-# threshold a better chance of being computed from a majority-good
-# population. groupChromPeaks() still distinguishes sQC from ltQC internally
-# via `sampleGroups = qc_sheet$sample_type`, so correspondence isn't
-# affected by the pooling, only the outlier-flagging population is. If
-# neither QC type has enough good files, there's nothing left to check
-# against — no method can rescue a batch with no reliable reference at all.
-# Set include_ltqc to "false" if ltQC shouldn't be trusted/considered at all
-# for this project (e.g. an unreliable external reference matrix) — sQC
-# will then be checked alone.
+# Reads <folder>/metadata/sample_sheet.xlsx, checks sQC + ltQC pooled
+# together per column x polarity group, unless [include_ltqc] is "false"
+# (default "true").
+# - Pooling: median/MAD have a 50% breakdown point — if one QC type alone
+#   is majority-faulty, pooling with the other gives the threshold a
+#   better shot at a majority-good population. groupChromPeaks() still
+#   distinguishes sQC/ltQC internally, so only the outlier-flagging
+#   population is pooled, not correspondence itself.
+# - Set include_ltqc "false" if ltQC shouldn't be trusted at all for this
+#   project — sQC is then checked alone.
+# - If neither QC type has enough good files, nothing can rescue that.
 #
-# The TIC check prefers an absolute, instrument-specific floor
-# (`int_threshold` in R/instrument_params.R) over a threshold computed from
-# this batch's own distribution, when available — see check_qc_quality()
-# for why (median/MAD break down once a majority of a batch is actually bad).
+# TIC prefers an absolute, instrument-specific floor (`int_threshold` in
+# R/instrument_params.R) over a batch-distribution threshold, when
+# available — see check_qc_quality() for why.
 #
-# Writes the results back into the sheet as two new columns: `qc_flagged`
-# (logical) and `qc_flag_reason`. Also writes a PDF report
-# (<folder>/metadata/qc_quality_report.pdf) with TIC and
-# aligned-feature-count barplots per group — blue bars passed, red bars
-# flagged, with the pass/fail threshold marked.
+# Writes `qc_flagged`/`qc_flag_reason` columns back into the sheet, plus an
+# interactive HTML report (<folder>/metadata/qc_quality_report.html): TIC
+# and aligned-feature-count charts per group, colored by batch (hover for
+# exact sample/value/status), faded = flagged.
 
 source("R/sample_sheet.R")
 source("R/spectrum_mode.R")
@@ -106,7 +98,7 @@ for (group_name in names(groups)) {
 }
 
 if (length(results_by_group) > 0) {
-  report_path <- file.path(folder, "metadata", "qc_quality_report.pdf")
+  report_path <- file.path(folder, "metadata", "qc_quality_report.html")
   generate_qc_report(results_by_group, report_path)
 }
 

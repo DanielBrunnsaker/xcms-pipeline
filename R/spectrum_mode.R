@@ -1,22 +1,20 @@
-# Detecting whether an mzML file is profile or centroid mode, and
-# centroiding profile data before peak picking — xcms's centWave works much
-# better on centroided data than profile data.
+# Detects whether an mzML file is profile or centroid mode, and centroids
+# profile data before peak picking — xcms's centWave works much better on
+# centroided data.
 #
 # MSnbase::pickPeaks() on an OnDiskMSnExp doesn't run immediately — it
-# registers a lazy ProcessingStep (the function stored just as the name
-# "pickPeaks") to be applied later when spectra are actually read. That
-# name only resolves if MSnbase is attached, not just namespace-referenced
-# via MSnbase:: — so, unlike the rest of this codebase, MSnbase needs to
-# actually be library()'d for centroiding to work.
+# registers a lazy ProcessingStep (function stored as the name "pickPeaks")
+# to apply later when spectra are read. That name only resolves if MSnbase
+# is attached, not just namespace-referenced — so, unlike the rest of this
+# codebase, MSnbase needs to be library()'d for centroiding to work.
 library(MSnbase)
 
 #' Detect whether an mzML file is profile or centroid mode.
 #'
-#' mzML files declare this per-spectrum via a "profile spectrum" or
-#' "centroid spectrum" cvParam, appearing further into the file than the
-#' header alone — so this reads a larger chunk from the start of the file
-#' (enough to reach the first spectrum's cvParams) and just checks for a
-#' literal mention of "profile" or "centroid" (case-insensitive).
+#' mzML declares this per-spectrum via a "profile spectrum"/"centroid
+#' spectrum" cvParam, past the header — reads a larger chunk from the file
+#' start (enough to reach the first spectrum's cvParams) and checks for a
+#' literal "profile"/"centroid" mention (case-insensitive).
 #'
 #' @param filepath Path to an .mzML file.
 #' @param n_bytes How many bytes to read from the start of the file.

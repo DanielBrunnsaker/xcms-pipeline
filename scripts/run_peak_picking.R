@@ -8,32 +8,25 @@
 # Usage:
 #   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size]
 #
-# <folder> is the same folder you pointed generate_sample_sheet.R at (or any
-# folder containing a metadata/sample_sheet.xlsx you curated by hand — either
-# way it must already be reviewed and have the columns validate_sample_sheet()
-# checks for below). Reads <folder>/metadata/sample_sheet.xlsx.
+# <folder>: same one passed to generate_sample_sheet.R (or any folder with a
+# hand-curated metadata/sample_sheet.xlsx meeting validate_sample_sheet()'s
+# requirements).
 #
-# [ipo_scope] controls how IPO optimization is scoped, and defaults to
-# "global" if omitted:
-#   - global: one IPO optimization per column x polarity group, applied to
-#     all its files regardless of batch.
-#   - batch: a separate IPO optimization per batch within each group (batch
-#     drift in chromatography/instrument conditions gets its own optimized
-#     parameters, at the cost of running IPO's expensive search once per
-#     batch instead of once per group). Each batch's optimized params are
-#     still saved separately (<folder>/output/<column>_<polarity>/<batch>/),
-#     but the peak-picked results are combined via xcms::c() before
-#     alignment/correspondence — there's always exactly one aligned feature
-#     table per group, regardless of scope.
+# [ipo_scope] (default "global"):
+# - global: one IPO optimization per column x polarity group, across all
+#   its files regardless of batch.
+# - batch: a separate optimization per batch (captures batch-to-batch
+#   drift, at the cost of running IPO's search once per batch). Each
+#   batch's params are still saved separately
+#   (<folder>/output/<column>_<polarity>/<batch>/), but peak-picked results
+#   are combined via xcms::c() before alignment — always exactly one
+#   aligned feature table per group, regardless of scope.
 #
-# [ipo_subset_size] (default 4) controls how many files IPO2 optimizes
-# against (select_ipo_subset() in R/peak_picking.R). In "global" scope, if
-# the group spans multiple batches, this instead becomes the max number of
-# batches to draw one representative file from each — so every batch's
-# chromatography/instrument conditions can inform the optimization rather
-# than only whichever few happen to fall in a small evenly-spaced sample.
-# Raising it improves batch coverage but multiplies IPO2's per-trial cost,
-# which matters since IPO2's own loop runs serially in this environment.
+# [ipo_subset_size] (default 4): how many files IPO2 optimizes against
+# (select_ipo_subset() in R/peak_picking.R). In "global" scope spanning
+# multiple batches, this becomes the max number of batches to draw one
+# representative file from each. Raising it improves batch coverage but
+# multiplies IPO2's per-trial cost.
 #
 # Output per group, under <folder>/output/<column>_<polarity>/:
 #   - peaks/xdata.rds        full aligned XCMSnExp object

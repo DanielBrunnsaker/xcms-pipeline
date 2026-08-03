@@ -1,11 +1,10 @@
-# Reading the acquisition start time directly from mzML XML, without parsing
-# the full (potentially large) document.
+# Reads the acquisition start time from mzML XML without parsing the full
+# (potentially large) document.
 
 #' Read the acquisition start time from an mzML file's <run> element.
 #'
-#' The `startTimeStamp` attribute sits near the top of the file, well before
-#' the (potentially huge) spectrum data, so this only reads a small chunk of
-#' the file rather than the whole thing.
+#' `startTimeStamp` sits near the top of the file, well before the (huge)
+#' spectrum data — only a small chunk needs to be read.
 #'
 #' @param filepath Path to an .mzML file.
 #' @param n_bytes How many bytes to read from the start of the file when

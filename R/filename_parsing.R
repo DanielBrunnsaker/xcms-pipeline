@@ -1,9 +1,10 @@
-# Parsing of mzML filenames of the form:
-#   DATE_BATCH_COLUMN_POLARITY_SAMPLENAME_INJORDER.raw.mzML
-# e.g. YYYY-MM-DD_BATCH_COL_POL_SAMPLENAME_INJORDER.raw.mzML
-# The sample-name field may be a real sample ID, a QC type (sQC/ltQC), or a
-# blank (SolvBlank). A "Plate<N>" token may also appear appended to the
-# batch field or prepended to the sample-name field.
+# Parsing of mzML filenames:
+#   DATE_BATCH_COLUMN_POLARITY_SAMPLENAME_INJORDER[.raw].mzML
+# Notes:
+# - ".raw" before the extension is optional (present on some exports, not others)
+# - sample-name may be a real sample ID, a QC type (sQC/ltQC), or a blank (SolvBlank)
+# - "Plate<N>" may appear appended to batch, or prepended to sample-name
+# - a literal "Plate_" marker is stripped before parsing (see SUPERFLUOUS_FILENAME_MARKERS)
 
 MZML_FILENAME_PATTERN <- paste0(
   "^(\\d{4}-\\d{2}-\\d{2})_",  # date
@@ -12,21 +13,24 @@ MZML_FILENAME_PATTERN <- paste0(
   "(POS|NEG)_",                # polarity
   "([^_]+)_",                  # sample name (or sQC/ltQC)
   "(\\d+)",                    # injection order
-  "\\.raw\\.mzml$"
+  "(?:\\.raw)?\\.mzml$"        # ".raw" before the extension is optional
 )
 
-# Non-sample name prefixes, matched case-insensitively against the start of
-# the sample name (allowing trailing characters, e.g. a replicate number).
-# Extend this list as new QC/blank types show up.
+# TODO: revisit — assumed to carry no information (e.g. whether the ID
+# after it, like "N10", ever matters), not a confirmed-safe assumption.
+SUPERFLUOUS_FILENAME_MARKERS <- c("Plate_")
+
+# Non-sample-name prefixes, matched case-insensitively against the start of
+# the sample name (allows trailing chars, e.g. a replicate number). Extend
+# as new QC/blank types show up.
 SAMPLE_TYPE_PREFIXES <- c(
   "sQC" = "sQC",
   "ltQC" = "ltQC",
   "SolvBlank" = "Blank"
 )
 
-#' Classify a sample name into a sample type via case-insensitive prefix
-#' match. Anything that doesn't match a known non-sample prefix is a regular
-#' "Sample".
+#' Classify a sample name via case-insensitive prefix match against
+#' SAMPLE_TYPE_PREFIXES; anything unmatched is a regular "Sample".
 classify_sample_type <- function(sample_name) {
   upper_name <- toupper(sample_name)
   for (prefix in names(SAMPLE_TYPE_PREFIXES)) {
@@ -39,16 +43,11 @@ classify_sample_type <- function(sample_name) {
 
 PLATE_TOKEN_PATTERN <- "^Plate(\\d+)$"
 
-#' Extract a "Plate<N>" token from a hyphen-delimited field, if present.
+#' Extract a "Plate<N>" token from a hyphen-delimited field (batch or
+#' sample-name), if present.
 #'
-#' The plate can show up appended to the batch field or prepended to the
-#' sample-name field — this handles both by just looking for a "Plate<N>"
-#' token among the hyphen-separated parts, matched case-insensitively.
-#'
-#' @param field Character scalar (already split out of the filename, e.g.
-#'   the batch or sample-name field).
-#' @return A list with `value` (the field with the plate token removed) and
-#'   `plate` (normalized "Plate<N>", or NA if no plate token was found).
+#' @param field Character scalar already split out of the filename.
+#' @return list(value = field with token removed, plate = "Plate<N>" or NA).
 extract_plate <- function(field) {
   parts <- strsplit(field, "-", fixed = TRUE)[[1]]
   matches <- regmatches(parts, regexec(PLATE_TOKEN_PATTERN, parts, ignore.case = TRUE))
@@ -71,9 +70,14 @@ extract_plate <- function(field) {
 #' @return A one-row data frame, or throws an error if the filename doesn't
 #'   match the expected pattern.
 parse_mzml_filename <- function(filename) {
+  parse_target <- filename
+  for (marker in SUPERFLUOUS_FILENAME_MARKERS) {
+    parse_target <- sub(marker, "", parse_target, fixed = TRUE)
+  }
+
   m <- regmatches(
-    filename,
-    regexec(MZML_FILENAME_PATTERN, filename, ignore.case = TRUE)
+    parse_target,
+    regexec(MZML_FILENAME_PATTERN, parse_target, ignore.case = TRUE)
   )[[1]]
 
   if (length(m) == 0) {
@@ -115,15 +119,12 @@ parse_mzml_filename <- function(filename) {
 
 #' Recursively scan a directory for .mzML files and parse each filename.
 #'
-#' Fails loudly (stopping and listing every offending file) if any filename
-#' does not match the expected pattern, so mis-named files are caught before
-#' peak picking rather than silently mis-parsed.
-#'
-#' Injection order is preferably read from each file's mzML acquisition
-#' timestamp (the true run order) rather than the number encoded in the
-#' filename. But if even a single file's timestamp can't be read, the whole
-#' batch falls back to the filename-encoded number instead, rather than
-#' mixing two different ordering sources within one sheet.
+#' - Fails loudly, listing every offending file, rather than silently
+#'   mis-parsing a mis-named one.
+#' - injection_order prefers each file's mzML acquisition timestamp (true
+#'   run order) over the filename-encoded number; if even one file's
+#'   timestamp is unreadable, the whole batch falls back to the
+#'   filename-encoded number instead of mixing two ordering sources.
 #'
 #' @param raw_dir Path to the project's raw data directory (may contain
 #'   per-batch subfolders).

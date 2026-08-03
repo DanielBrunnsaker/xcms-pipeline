@@ -1,63 +1,51 @@
 # IPO2-based optimization of xcms centWave parameters, and peak picking using
 # the optimized parameters, run independently per column x polarity group.
 #
-# Uses the IPO2 package (github.com/wmoldham/IPO2) rather than the original
-# Bioconductor IPO package — IPO2 is a from-scratch reimplementation targeting
-# the modern findChromPeaks()/CentWaveParam workflow directly, whereas IPO
-# routes through xcms's old, unmaintained xcmsSet() API, which broke against
-# current xcms/BiocParallel (bpstopOnError could not be found).
+# Uses IPO2 (github.com/wmoldham/IPO2), not the original Bioconductor IPO:
+# - IPO2 targets the modern findChromPeaks()/CentWaveParam workflow directly.
+# - IPO routes through xcms's old xcmsSet() API, which broke against current
+#   xcms/BiocParallel (bpstopOnError could not be found).
 # Install with: renv::install("wmoldham/IPO2")
 #
-# IPO2's own internal parameter-scoring loop calls BiocParallel::bplapply()
-# without specifying a backend, so it uses whatever the default registered
-# one is. MulticoreParam (fork-based) hit a known BiocParallel bug here
-# ("wrong args for environment subassignment",
-# https://github.com/Bioconductor/BiocParallel/issues/206) that failed every
-# worker in a batch identically — and fork() doesn't exist on Windows
-# anyway, so MulticoreParam would silently degrade to single-core there
-# regardless. Registering SnowParam (real separate processes over local
-# sockets, not fork-based) as the default instead — genuinely untested
-# against IPO2's loop, so if this reintroduces a similar failure, drop back
-# to BiocParallel::SerialParam() here. Our own findChromPeaks()/
-# adjustRtime()/groupChromPeaks()/fillChromPeaks() calls elsewhere are
-# unaffected either way — they explicitly pass their own BPPARAM (see
-# bp_workers() in R/parallel.R), which overrides this default.
+# IPO2's own scoring loop calls BiocParallel::bplapply() without a backend,
+# so it uses whatever's registered as default:
+# - MulticoreParam (fork-based) hit a known BiocParallel bug here ("wrong
+#   args for environment subassignment", github.com/Bioconductor/
+#   BiocParallel/issues/206), failing every worker in a batch identically.
+# - fork() doesn't exist on Windows anyway, so MulticoreParam would degrade
+#   to single-core there regardless.
+# - Registering SnowParam (separate processes over local sockets) instead —
+#   untested against IPO2's loop; if it reintroduces a similar failure, drop
+#   back to BiocParallel::SerialParam() here.
+# Our own findChromPeaks()/adjustRtime()/groupChromPeaks()/fillChromPeaks()
+# calls elsewhere are unaffected either way — they explicitly pass their own
+# BPPARAM (bp_workers() in R/parallel.R), overriding this default.
 BiocParallel::register(BiocParallel::SnowParam(workers = default_worker_count(), progressbar = TRUE))
 
 #' Pick a small representative subset of files to run parameter optimization
 #' on.
 #'
-#' The design-of-experiments search evaluates many parameter combinations,
-#' so it's run on a handful of files rather than the full batch. Preference
-#' order:
-#'   1. sQC — pooled from the study's own samples, so it's the same matrix
-#'      injected repeatedly, giving the optimizer a stable, reproducible,
-#'      well-populated signal to tune against.
-#'   2. ltQC — a long-term reference matrix from outside the study; still
-#'      QC-like reproducibility, but not representative of this study's
-#'      chemistry, so only used when sQC isn't available in enough numbers.
-#'   3. Regular study samples — heterogeneous by design, which works against
-#'      the optimizer's reproducibility-based scoring, so this is a last
-#'      resort.
+#' Runs on a handful of files, not the full batch (the DoE search evaluates
+#' many parameter combinations). Preference order:
+#' 1. sQC — pooled from the study's own samples, same matrix injected
+#'    repeatedly: a stable, reproducible signal to tune against.
+#' 2. ltQC — external long-term reference matrix; still QC-like
+#'    reproducibility, but not this study's chemistry. Used only if sQC is
+#'    insufficient.
+#' 3. Regular study samples — heterogeneous by design, works against the
+#'    optimizer's reproducibility-based scoring. Last resort.
 #'
-#' If the candidate rows span multiple batches (as in "global" IPO scope,
-#' which can cover up to a few dozen batches), one representative file is
-#' picked per batch instead — otherwise batch-to-batch drift in
-#' chromatography/instrument conditions would be invisible to the
-#' optimizer, since only whichever batches happen to fall in an
-#' evenly-time-spaced sample of `n` files would ever be represented at all.
-#' If there are more batches than `n`, the batches themselves are
-#' subsampled evenly first, so coverage stays spread across the whole
-#' timespan rather than favoring earlier/later batches. Within a single
-#' batch (as in "batch" IPO scope, where this is always called per-batch),
-#' picks are instead spread evenly across `injection_order` (time) within
-#' that batch, same as before.
+#' Batch handling:
+#' - Multiple batches present (e.g. "global" scope): one representative
+#'   file per batch, so batch-to-batch drift isn't invisible to the
+#'   optimizer. If there are more batches than `n`, batches themselves are
+#'   subsampled evenly across the timespan.
+#' - Single batch (e.g. "batch" scope): picks spread evenly across
+#'   `injection_order` within that batch, as before.
 #'
-#' QC rows flagged as faulty by `scripts/check_qc_quality.R` (a `qc_flagged`
-#' column with value `TRUE`) are excluded from consideration entirely — a
-#' missed injection or empty vial should never end up as the "representative"
-#' QC. If that check was never run, the sheet won't have the column, and
-#' every QC row is treated as usable.
+#' QC rows flagged by `scripts/check_qc_quality.R` (`qc_flagged == TRUE`)
+#' are excluded — a missed injection/empty vial should never be the
+#' "representative" QC. If that check was never run, every QC row counts.
 #'
 #' @param group_sheet Sample sheet rows for a single column x polarity group.
 #' @param n Number of files to select (or, when multiple batches are
@@ -133,12 +121,10 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #'
 #' @param group_sheet Sample sheet rows for this group.
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
-#' @param ipo_subset_size Passed to `select_ipo_subset()` as `n` — number of
-#'   files (or, when the group spans multiple batches, number of batches to
-#'   draw one file from each) used for the optimization search. Larger
-#'   values give better batch coverage in "global" scope but multiply
-#'   IPO2's per-trial cost, which matters since IPO2's own loop runs
-#'   serially in this environment (see the top of this file).
+#' @param ipo_subset_size Passed to `select_ipo_subset()` as `n` (files, or
+#'   batches to draw one file from each). Larger values improve batch
+#'   coverage in "global" scope but multiply IPO2's per-trial cost (see the
+#'   top of this file for IPO2's parallel-backend caveats).
 #' @return An xcms::CentWaveParam with the optimized settings.
 run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   params_path <- file.path(out_dir, "ipo_params.rds")
@@ -219,18 +205,18 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
   xcms::findChromPeaks(raw_data, param = centwave_param, BPPARAM = bp_workers())
 }
 
-#' Align retention times, group peaks into cross-sample features, and fill
-#' gaps — turning individually-picked peaks into one aligned feature table.
-#' Follows the same steps as github.com/MetaboComp/xcms_pipeline
-#' (pure_xcms_pipeline.R): adjustRtime(ObiwarpParam) ->
-#' groupChromPeaks(PeakDensityParam) -> fillChromPeaks(ChromPeakAreaParam).
-#' Uses xcms's built-in defaults for all three params for now (untuned).
+#' Turns individually-picked peaks into one aligned feature table: aligns
+#' retention times, groups peaks into cross-sample features, fills gaps.
+#' Same steps as github.com/MetaboComp/xcms_pipeline (pure_xcms_pipeline.R):
+#' adjustRtime(ObiwarpParam) -> groupChromPeaks(PeakDensityParam) ->
+#' fillChromPeaks(ChromPeakAreaParam). Uses xcms's built-in defaults for all
+#' three (untuned, for now).
 #'
-#' `sampleGroups` mirrors the reference pipeline's actual usage: despite the
-#' name, their "sample_group" is QC/sample TYPE classification (sQC/ltQC/
-#' Blank/Sample), not biological condition — so this uses our own
-#' already-populated `sample_type` column for the same purpose, rather than
-#' the sheet's manually-curated (and possibly unfilled) `sample_group`.
+#' `sampleGroups` uses our `sample_type` column (sQC/ltQC/Blank/Sample) —
+#' mirrors the reference pipeline's actual usage: despite the name, their
+#' "sample_group" is QC/sample TYPE classification, not biological
+#' condition, and is a better fit than the sheet's manually-curated
+#' (possibly unfilled) `sample_group`.
 #'
 #' @param xdata XCMSnExp with peaks already picked (via `pick_peaks()`, or
 #'   several combined with `xcms::c()`).
