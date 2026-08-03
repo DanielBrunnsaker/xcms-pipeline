@@ -23,10 +23,13 @@
 # R/instrument_params.R) over a batch-distribution threshold, when
 # available — see check_qc_quality() for why.
 #
-# Writes `qc_flagged`/`qc_flag_reason` columns back into the sheet, plus an
-# interactive HTML report (<folder>/metadata/qc_quality_report.html): TIC
-# and aligned-feature-count charts per group, colored by batch (hover for
-# exact sample/value/status), faded = flagged.
+# Writes `qc_flagged_global` (outlier vs. the whole group), `qc_flagged_batch`
+# (outlier vs. its own batch), `qc_flagged` (either — this is what
+# select_ipo_subset() excludes on), and `qc_flag_reason` back into the
+# sheet. Also writes an interactive HTML report
+# (<folder>/metadata/qc_quality_report.html): TIC and aligned-feature-count
+# charts per group, colored by batch (hover for exact sample/value/reason),
+# faded = flagged.
 
 source("R/sample_sheet.R")
 source("R/spectrum_mode.R")
@@ -55,6 +58,8 @@ if (!file.exists(sheet_path)) {
 sample_sheet <- as.data.frame(readxl::read_excel(sheet_path))
 validate_sample_sheet(sample_sheet)
 
+sample_sheet$qc_flagged_global <- FALSE
+sample_sheet$qc_flagged_batch <- FALSE
 sample_sheet$qc_flagged <- FALSE
 sample_sheet$qc_flag_reason <- NA_character_
 
@@ -84,10 +89,14 @@ for (group_name in names(groups)) {
   results_by_group[[group_name]] <- result
 
   match_idx <- match(result$filepath, sample_sheet$filepath)
+  sample_sheet$qc_flagged_global[match_idx] <- result$flagged_global
+  sample_sheet$qc_flagged_batch[match_idx] <- result$flagged_batch
   sample_sheet$qc_flagged[match_idx] <- result$flagged
   sample_sheet$qc_flag_reason[match_idx] <- result$reason
 
-  print(result[, c("filepath", "tic", "aligned_feature_count", "flagged", "reason")])
+  print(result[, c(
+    "filepath", "tic", "aligned_feature_count", "flagged_global", "flagged_batch", "reason"
+  )])
 
   n_flagged <- sum(result$flagged)
   if (n_flagged > 0) {
