@@ -24,16 +24,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy renv scaffolding first (before application code) so `renv::restore()`
-# is cached by Docker across rebuilds that only touch R/ or scripts/
+# Copy renv scaffolding first (before application code) so package
+# installation is cached by Docker across rebuilds that only touch R/ or
+# scripts/
 COPY .Rprofile renv.lock ./
 COPY renv/activate.R renv/settings.json ./renv/
+COPY docker/install_packages.R ./docker/install_packages.R
 
 # Sandboxing protects a shared host library from a project; redundant inside
 # an already-isolated container, and avoids permission-write noise.
 ENV RENV_CONFIG_SANDBOX_ENABLED=FALSE
 RUN Rscript -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
-RUN Rscript -e "renv::restore()"
+RUN Rscript docker/install_packages.R
 
 COPY R/ ./R/
 COPY scripts/ ./scripts/
