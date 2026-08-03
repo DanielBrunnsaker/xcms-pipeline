@@ -1,0 +1,91 @@
+# xcms-pipeline
+
+Untargeted LC-MS pipeline: derives sample metadata from mzML filenames, checks QC
+injection quality, then runs IPO2-optimized `xcms` peak picking, retention-time
+alignment, correspondence, and gap filling to produce one aligned feature table per
+column x polarity method (e.g. RP_POS). Stops at the aligned feature table — blank
+filtering, batch correction, and clustering are a separate later stage.
+
+Modeled after [github.com/MetaboComp/xcms_pipeline](https://github.com/MetaboComp/xcms_pipeline).
+
+## Requirements
+
+Docker (with the WSL2 backend on Windows). Nothing else needs to be installed
+locally — R, Bioconductor, and all packages are built into the image.
+
+## Setup on a new machine
+
+```
+git clone <repo-url> xcms-pipeline
+cd xcms-pipeline
+docker build -t xcms-pipeline .
+```
+
+The build compiles the full Bioconductor stack (`xcms`, `mzR`, `MSnbase`, `IPO2`
+from GitHub) — expect it to take a while.
+
+## Usage
+
+Point every command at a folder of `.mzML` files via a bind mount. Replace the path
+below with wherever your data actually lives (Windows: `C:\path\to\data`, macOS/Linux:
+`/path/to/data`).
+
+**1. Generate the sample sheet**
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/generate_sample_sheet.R /data
+```
+Writes `/path/to/data/metadata/sample_sheet.xlsx`. Open it and review: fill in
+`sample_group`, `instrument` (must match an entry in `R/instrument_params.R`, e.g.
+`MRT`), and `notes`. Batch/plate/QC-type/injection-order are all derived from the
+filenames automatically.
+
+**2. Check QC quality**
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/check_qc_quality.R /data
+```
+Flags likely-faulty QC injections (missed injections, empty vials) via TIC and
+aligned feature count, writing `qc_flagged`/`qc_flag_reason` back into the sheet and
+an interactive report to `metadata/qc_quality_report.html` (colored by batch, hover
+for exact values, faded = flagged). Optional second argument `false` excludes `ltQC`
+entirely instead of pooling it with `sQC`:
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/check_qc_quality.R /data false
+```
+
+**3. Run peak picking**
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data
+```
+Optional arguments: `[ipo_scope]` (`global` default, or `batch` for a separate IPO
+optimization per batch) and `[ipo_subset_size]` (default `4` — how many files/batches
+IPO2 optimizes against):
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 8
+```
+
+## Output
+
+Everything lands back on the host under `/path/to/data/` (bind-mounted, never baked
+into the image):
+
+```
+metadata/
+  sample_sheet.xlsx          reviewed sample metadata
+  qc_quality_report.html      interactive QC charts
+output/<column>_<polarity>/
+  ipo_params.rds              optimized centWave parameters
+  ipo_history.rds/.csv        full IPO2 optimization search history
+  peaks/xdata.rds              full aligned XCMSnExp object
+  peaks/peak_table.csv        flat per-peak table (includes gap-filled peaks)
+  feature_table.csv           aligned feature table: one row per feature, one column per sample
+```
+
+## Notes
+
+- Every script is re-runnable: the sample sheet and QC steps back up the sheet
+  before overwriting it, and peak picking caches IPO2 results so a re-run doesn't
+  re-optimize from scratch.
+- `R/instrument_params.R` holds per-instrument/column/polarity CentWave starting
+  values and IPO2 search bounds — edit it to add or tune instruments.
+- Rebuild the Docker image after pulling any code change; a container doesn't
+  pick up new source automatically.
