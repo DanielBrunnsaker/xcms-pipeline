@@ -12,12 +12,27 @@
 # is registered as the session default (see R/peak_picking.R) rather than
 # by bp_workers() below.
 
-#' Number of parallel workers to use for peak-picking/alignment steps,
-#' leaving some headroom for the OS/other processes rather than claiming
-#' every core.
+#' Number of parallel workers to use for peak-picking/alignment steps (and
+#' IPO2's loop, via the session default registered in R/peak_picking.R).
 #'
-#' @param headroom Cores to leave free.
+#' Reads the `XCMS_PIPELINE_CORES` env var if set (e.g.
+#' `docker run -e XCMS_PIPELINE_CORES=8 ...`); otherwise defaults to all
+#' detected cores minus `headroom`, leaving some free for the OS/other
+#' processes rather than claiming every core.
+#'
+#' @param headroom Cores to leave free when no override is set.
 default_worker_count <- function(headroom = 2) {
+  override <- Sys.getenv("XCMS_PIPELINE_CORES", unset = NA)
+  if (!is.na(override)) {
+    n <- suppressWarnings(as.integer(override))
+    if (!is.na(n) && n >= 1) {
+      return(n)
+    }
+    warning(sprintf(
+      "XCMS_PIPELINE_CORES=%s is not a valid positive integer; ignoring.", override
+    ), call. = FALSE)
+  }
+
   max(1, parallel::detectCores() - headroom)
 }
 

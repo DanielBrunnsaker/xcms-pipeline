@@ -63,6 +63,13 @@ IPO2 optimizes against):
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 8
 ```
 
+By default, parallel steps use all detected cores minus 2. Override with the
+`XCMS_PIPELINE_CORES` env var (applies to peak picking and the QC quality check
+alike, since both run parallel steps):
+```
+docker run --rm -e XCMS_PIPELINE_CORES=8 -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data
+```
+
 ## Output
 
 Everything lands back on the host under `/path/to/data/` (bind-mounted, never baked
