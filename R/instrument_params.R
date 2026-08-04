@@ -23,7 +23,7 @@ INSTRUMENT_PARAMS <- list(
         ),
         bounds = list(
           min_peakwidth = c(0.5, 5), max_peakwidth = c(10, 45),
-          mzdiff = c(-Inf, Inf), ppm = c(1, 25)
+          mzdiff = c(-0.001, 0.01), ppm = c(1, 25)
         ),
         int_threshold = 20000
       ),
@@ -34,7 +34,7 @@ INSTRUMENT_PARAMS <- list(
         ),
         bounds = list(
           min_peakwidth = c(0.5, 5), max_peakwidth = c(10, 45),
-          mzdiff = c(-Inf, Inf), ppm = c(1, 25)
+          mzdiff = c(-0.001, 0.01), ppm = c(1, 25)
         ),
         int_threshold = 20000
       )
@@ -46,7 +46,7 @@ INSTRUMENT_PARAMS <- list(
       ),
       bounds = list(
         min_peakwidth = c(0, 5), max_peakwidth = c(5, 45),
-        mzdiff = c(-Inf, Inf), ppm = c(5, 18)
+        mzdiff = c(-0.001, 0.01), ppm = c(5, 18)
       ),
       int_threshold = 10000
     )
