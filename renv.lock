@@ -505,51 +505,29 @@
     },
     "IPO2": {
       "Package": "IPO2",
-      "Version": "0.0.4",
-      "Source": "GitHub",
-      "Title": "Parameter Optimization for XCMS Data Processing",
-      "Authors@R": "person(given = \"William\", family = \"Oldham\", role = c(\"aut\", \"cre\"), email = \"wm.oldham@gmail.com\", comment = c(ORCID = \"0000-0003-3029-4866\"))",
-      "Description": "Isotopologue Parameter Optimization (IPO) was initially released as a package to facilitate the optimization of various XCMS parameters to  improve peak identification and retention time alignment. With the development of XCMS, the ease of integration with IPO diminished. IPO2 aims to apply a  similar approach to parameter optimization as the original IPO while working with the latest versions of XCMS.",
-      "License": "MIT + file LICENSE",
+      "Version": "0.2",
+      "Source": "GitLab",
+      "Type": "Package",
+      "Title": "Optimize XCMS3 parameters",
+      "Author": "Carl Brunius <carl.brunius@chalmers.se>",
+      "Maintainer": "Carl Brunius <carl.brunius@chalmers.se>",
+      "Description": "The original IPO package optimizes XCMS2 (xcmsSet) parameters using a Design-of-Experiment / response surfact modeling approach. The IPO2 package has been updated to allow optimization of XCMS3 parameters, using optimizers from the `nloptr` package.  In addition, it allows for constrained optimizations, i.e. allowing for lower and upper limits for parameters to be optimized.",
+      "Depends": [
+        "xcms"
+      ],
+      "Imports": [
+        "BiocParallel"
+      ],
+      "License": "Whatever",
       "Encoding": "UTF-8",
       "LazyData": "true",
-      "Roxygen": "list(markdown = TRUE)",
-      "RoxygenNote": "7.1.1",
-      "Depends": [
-        "R (>= 3.5.0)"
-      ],
-      "Suggests": [
-        "spelling",
-        "testthat",
-        "knitr",
-        "rmarkdown",
-        "MSnbase"
-      ],
-      "Language": "en-US",
-      "URL": "https://github.com/wmoldham/IPO2",
-      "BugReports": "https://github.com/wmoldham/IPO2/issues",
-      "Imports": [
-        "xcms",
-        "rsm",
-        "data.table",
-        "purrr",
-        "BiocParallel",
-        "scales",
-        "rlang",
-        "stats",
-        "grDevices",
-        "graphics",
-        "magrittr"
-      ],
-      "VignetteBuilder": "knitr",
-      "Author": "William Oldham [aut, cre] (ORCID: <https://orcid.org/0000-0003-3029-4866>)",
-      "Maintainer": "William Oldham <wm.oldham@gmail.com>",
-      "RemoteType": "github",
-      "RemoteHost": "api.github.com",
-      "RemoteUsername": "wmoldham",
+      "RoxygenNote": "7.3.1",
+      "RemoteType": "gitlab",
+      "RemoteHost": "gitlab.com",
+      "RemoteUsername": "CarlBrunius",
       "RemoteRepo": "IPO2",
-      "RemoteRef": "master",
-      "RemoteSha": "b3aa7462eb7a1edf2ffb2fc8eae180c4dd767252"
+      "RemoteRef": "main",
+      "RemoteSha": "25f5e95994b2d0fbeca44dccb3361173af53d9d4"
     },
     "IRanges": {
       "Package": "IRanges",
@@ -2615,35 +2593,6 @@
       "NeedsCompilation": "yes",
       "Author": "Hadley Wickham [aut, cre] (ORCID: <https://orcid.org/0000-0003-4757-117X>), Romain François [aut] (ORCID: <https://orcid.org/0000-0002-2444-4226>), Lionel Henry [aut], Kirill Müller [aut] (ORCID: <https://orcid.org/0000-0002-1416-3412>), Davis Vaughan [aut] (ORCID: <https://orcid.org/0000-0003-4777-038X>), Posit Software, PBC [cph, fnd]",
       "Maintainer": "Hadley Wickham <hadley@posit.co>",
-      "Repository": "CRAN"
-    },
-    "estimability": {
-      "Package": "estimability",
-      "Version": "2.0.0",
-      "Source": "Repository",
-      "Type": "Package",
-      "Title": "Tools for Assessing Estimability of Linear Predictions",
-      "Date": "2026-06-18",
-      "Authors@R": "c(person(\"Russell\", \"Lenth\", role = c(\"aut\", \"cph\"),  email = \"russell-lenth@uiowa.edu\"), person(\"Michael\", \"Dumelle\", role = c(\"cre\", \"aut\"), email = \"Dumelle.Michael@epa.gov\"))",
-      "Depends": [
-        "stats",
-        "R(>= 4.1.0)"
-      ],
-      "Suggests": [
-        "knitr",
-        "rmarkdown"
-      ],
-      "Description": "Provides tools for determining estimability of linear functions  of regression coefficients, and 'epredict' methods that handle  non-estimable cases correctly. Estimability theory is discussed in many linear-models textbooks including Chapter 3 of Monahan, JF (2008),  \"A Primer on Linear Models\", Chapman and Hall (ISBN 978-1-4200-6201-4).",
-      "URL": "https://github.com/rvlenth/estimability, https://rvlenth.github.io/estimability/",
-      "BugReports": "https://github.com/rvlenth/estimability/issues",
-      "ByteCompile": "yes",
-      "License": "GPL (>= 3)",
-      "VignetteBuilder": "knitr",
-      "Encoding": "UTF-8",
-      "RoxygenNote": "7.3.3",
-      "NeedsCompilation": "no",
-      "Author": "Russell Lenth [aut, cph], Michael Dumelle [cre, aut]",
-      "Maintainer": "Michael Dumelle <Dumelle.Michael@epa.gov>",
       "Repository": "CRAN"
     },
     "evaluate": {
@@ -4815,38 +4764,6 @@
       "NeedsCompilation": "no",
       "Author": "JJ Allaire [aut], Yihui Xie [aut, cre] (ORCID: <https://orcid.org/0000-0003-0645-5666>), Christophe Dervieux [aut] (ORCID: <https://orcid.org/0000-0003-4474-2498>), Jonathan McPherson [aut], Javier Luraschi [aut], Kevin Ushey [aut], Aron Atkins [aut], Hadley Wickham [aut], Joe Cheng [aut], Winston Chang [aut], Richard Iannone [aut] (ORCID: <https://orcid.org/0000-0003-3925-190X>), Andrew Dunning [ctb] (ORCID: <https://orcid.org/0000-0003-0464-5036>), Atsushi Yasumoto [ctb, cph] (ORCID: <https://orcid.org/0000-0002-8335-495X>, cph: Number sections Lua filter), Barret Schloerke [ctb], Carson Sievert [ctb] (ORCID: <https://orcid.org/0000-0002-4958-2844>), Devon Ryan [ctb] (ORCID: <https://orcid.org/0000-0002-8549-0971>), Frederik Aust [ctb] (ORCID: <https://orcid.org/0000-0003-4900-788X>), Jeff Allen [ctb], JooYoung Seo [ctb] (ORCID: <https://orcid.org/0000-0002-4064-6012>), Malcolm Barrett [ctb], Rob Hyndman [ctb], Romain Lesur [ctb], Roy Storey [ctb], Ruben Arslan [ctb], Sergio Oller [ctb], Posit Software, PBC [cph, fnd], jQuery UI contributors [ctb, cph] (jQuery UI library; authors listed in inst/rmd/h/jqueryui/AUTHORS.txt), Mark Otto [ctb] (Bootstrap library), Jacob Thornton [ctb] (Bootstrap library), Bootstrap contributors [ctb] (Bootstrap library), Twitter, Inc [cph] (Bootstrap library), Alexander Farkas [ctb, cph] (html5shiv library), Scott Jehl [ctb, cph] (Respond.js library), Ivan Sagalaev [ctb, cph] (highlight.js library), Greg Franko [ctb, cph] (tocify library), John MacFarlane [ctb, cph] (Pandoc templates), Google, Inc. [ctb, cph] (ioslides library), Dave Raggett [ctb] (slidy library), W3C [cph] (slidy library), Dave Gandy [ctb, cph] (Font-Awesome), Ben Sperry [ctb] (Ionicons), Drifty [cph] (Ionicons), Aidan Lister [ctb, cph] (jQuery StickyTabs), Benct Philip Jonsson [ctb, cph] (pagebreak Lua filter), Albert Krewinkel [ctb, cph] (pagebreak Lua filter)",
       "Maintainer": "Yihui Xie <xie@yihui.name>",
-      "Repository": "CRAN"
-    },
-    "rsm": {
-      "Package": "rsm",
-      "Version": "2.10.6",
-      "Source": "Repository",
-      "Type": "Package",
-      "Date": "2025-03-24",
-      "Title": "Response-Surface Analysis",
-      "Authors@R": "c(person(\"Russell\", \"Lenth\", role = c(\"aut\", \"cre\"),  email = \"russell-lenth@uiowa.edu\"))",
-      "Description": "Provides functions to generate response-surface designs,  fit first- and second-order response-surface models,  make surface plots, obtain the path of steepest ascent,  and do canonical analysis. A good reference on these methods  is Chapter 10 of Wu, C-F J and Hamada, M (2009)  \"Experiments: Planning, Analysis, and Parameter Design Optimization\" ISBN 978-0-471-69946-0. An early version of the package is documented in Journal of Statistical Software <doi:10.18637/jss.v032.i07>.",
-      "URL": "https://github.com/rvlenth/rsm,https://rvlenth.github.io/rsm/",
-      "BugReports": "https://github.com/rvlenth/rsm/issues",
-      "Suggests": [
-        "emmeans (> 1.3.5.1)",
-        "vdg",
-        "conf.design",
-        "DoE.base",
-        "FrF2",
-        "knitr",
-        "rmarkdown"
-      ],
-      "Imports": [
-        "estimability"
-      ],
-      "License": "GPL (>= 2)",
-      "LazyLoad": "yes",
-      "ByteCompile": "yes",
-      "VignetteBuilder": "knitr",
-      "NeedsCompilation": "no",
-      "Author": "Russell Lenth [aut, cre]",
-      "Maintainer": "Russell Lenth <russell-lenth@uiowa.edu>",
       "Repository": "CRAN"
     },
     "sass": {

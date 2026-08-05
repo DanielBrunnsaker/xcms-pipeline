@@ -16,7 +16,8 @@
 #
 # When restore() fails (e.g. an unavailable devel-era version):
 # 1. Patch the specific packages known to hit this (Bioconductor core +
-#    IPO2) with whatever devel currently serves.
+#    IPO2, from gitlab.com/CarlBrunius/IPO2) with whatever devel currently
+#    serves.
 # 2. Retry restore() — a single failed attempt can abort before reaching
 #    later-queued packages, silently leaving them uninstalled without
 #    naming them in the error.
@@ -57,7 +58,12 @@ if (!restore_ok) {
   }
 
   if ("IPO2" %in% original_locked_pkgs && !"IPO2" %in% rownames(installed.packages())) {
-    renv::install("wmoldham/IPO2")
+    # gitlab.com/CarlBrunius/IPO2 -- the package the reference pipeline
+    # (MetaboComp/xcms_pipeline) itself depends on for optimXCMS(). Its
+    # DESCRIPTION doesn't declare nloptr despite calling nloptr::nloptr()
+    # internally, so install it explicitly too.
+    renv::install("nloptr")
+    renv::install("gitlab::CarlBrunius/IPO2")
   }
 
   # Pick up anything else restore() hadn't reached before aborting.

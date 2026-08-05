@@ -63,9 +63,19 @@ sample_sheet$qc_flagged_batch <- FALSE
 sample_sheet$qc_flagged <- FALSE
 sample_sheet$qc_flag_reason <- NA_character_
 
+# Excluded (include=FALSE) rows are skipped for checking, but sample_sheet
+# itself stays whole — it gets written back in full at the end, so
+# filtering it directly here would silently drop those rows from the file
+# rather than just skip processing them.
+included <- get_included(sample_sheet)
+if (any(!included)) {
+  message(sprintf("Excluding %d file(s) marked include=FALSE from QC checks.", sum(!included)))
+}
+checkable_sheet <- sample_sheet[included, , drop = FALSE]
+
 message(sprintf("Including ltQC in checks: %s\n", include_ltqc))
 
-groups <- split(sample_sheet, paste(sample_sheet$column, sample_sheet$polarity, sep = "_"))
+groups <- split(checkable_sheet, paste(checkable_sheet$column, checkable_sheet$polarity, sep = "_"))
 results_by_group <- list()
 
 for (group_name in names(groups)) {

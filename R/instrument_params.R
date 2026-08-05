@@ -2,8 +2,8 @@
 # bounds, keyed by instrument x column x polarity.
 # - Edit this file to add/tune entries; kept separate from R/peak_picking.R
 #   so instrument-specific numbers don't mix with pipeline logic.
-# - Falls back to IPO2's own defaults for any combo not listed here — fill
-#   in SynaptXS (or other instruments) as you tune them.
+# - Falls back to default_ipo2_search_space() (below) for any combo not
+#   listed here — fill in SynaptXS (or other instruments) as you tune them.
 #
 # Each entry:
 # - starting_values: ppm, peakwidth (c(min, max)), snthresh,
@@ -46,7 +46,10 @@ INSTRUMENT_PARAMS <- list(
       ),
       bounds = list(
         min_peakwidth = c(0.5, 4), max_peakwidth = c(5, 45),
-        mzdiff = c(-0.001, 0.01), ppm = c(5, 18)
+        # mzdiff lower bound widened slightly below the -0.001 starting
+        # value -- IPO2::optimXCMS() requires the start to sit strictly
+        # inside its bounds (start > lower), not just within them.
+        mzdiff = c(-0.0015, 0.01), ppm = c(5, 18)
       ),
       int_threshold = 10000
     )
@@ -136,24 +139,63 @@ get_instrument_params <- function(instrument, column, polarity) {
   NULL
 }
 
+#' Build a starting-point CentWaveParam from an instrument config's
+#' starting_values. Fields not covered by starting_values (mzCenterFun,
+#' integrate, fitgauss, verboseColumns, roiList, firstBaselineCheck,
+#' roiScales) use xcms::CentWaveParam()'s own defaults.
+#'
+#' @param starting_values `starting_values` list from an INSTRUMENT_PARAMS
+#'   entry (or a generic fallback for unconfigured instruments).
+build_centwave_param <- function(starting_values) {
+  sv <- starting_values
+  xcms::CentWaveParam(
+    ppm = sv$ppm,
+    peakwidth = sv$peakwidth,
+    snthresh = sv$snthresh,
+    prefilter = sv$prefilter,
+    mzdiff = sv$mzdiff,
+    noise = sv$noise
+  )
+}
+
 #' Convert an instrument config entry (as returned by
-#' `get_instrument_params()`) into the `parameter_list` shape
-#' `IPO2::optimize_centwave()` expects.
+#' `get_instrument_params()`) into the shape `IPO2::optimXCMS()` expects:
+#' a starting-point CentWaveParam plus which fields to search over and
+#' their bounds.
+#'
+#' Bounds field names (`min_peakwidth`, `max_peakwidth`, `mzdiff`, `ppm`)
+#' already match `optimXCMS()`'s `optimVars` naming directly, so this is a
+#' near 1:1 translation of R/instrument_params.R's existing bounds shape.
 #'
 #' @param instrument_config One entry from `INSTRUMENT_PARAMS` (via
 #'   `get_instrument_params()`).
-build_ipo2_parameter_list <- function(instrument_config) {
-  sv <- instrument_config$starting_values
+#' @return A list(cwParam, optimVars, lower, upper).
+build_ipo2_search_space <- function(instrument_config) {
   b <- instrument_config$bounds
 
   list(
-    ppm = b$ppm,
-    min_peakwidth = b$min_peakwidth,
-    max_peakwidth = b$max_peakwidth,
-    snthresh = sv$snthresh,
-    prefilter_k = sv$prefilter[1],
-    prefilter_int = sv$prefilter[2],
-    mzdiff = b$mzdiff,
-    noise = sv$noise
+    cwParam = build_centwave_param(instrument_config$starting_values),
+    optimVars = names(b),
+    lower = vapply(b, `[`, numeric(1), 1),
+    upper = vapply(b, `[`, numeric(1), 2)
   )
+}
+
+#' Generic fallback search space for column x polarity groups with no
+#' instrument-specific config — IPO2 (Carl Brunius's) has no built-in
+#' "suggest defaults" the way the earlier IPO2 (wmoldham's) did, so this
+#' mirrors that package's suggested starting ranges by hand.
+default_ipo2_search_space <- function() {
+  build_ipo2_search_space(list(
+    starting_values = list(
+      ppm = 25, peakwidth = c(20, 50), snthresh = 100,
+      prefilter = c(3, 10000), mzdiff = -0.001, noise = 0
+    ),
+    bounds = list(
+      min_peakwidth = c(12, 28), max_peakwidth = c(35, 65),
+      # Lower bound widened slightly below the -0.001 starting value -- see
+      # the same note on the MRT/HILIC entry above.
+      mzdiff = c(-0.0015, 0.01), ppm = c(17, 32)
+    )
+  ))
 }

@@ -66,6 +66,7 @@ build_sample_sheet <- function(parsed) {
   parsed$instrument <- NA_character_
   parsed$sample_group <- NA_character_
   parsed$notes <- NA_character_
+  parsed$include <- TRUE
 
   parsed <- parsed[order(parsed$column, parsed$polarity, parsed$batch_plate, parsed$injection_order), ]
 
@@ -73,8 +74,23 @@ build_sample_sheet <- function(parsed) {
     "filepath", "filename", "date", "batch", "plate", "batch_plate",
     "column", "polarity", "sample_name", "sample_label", "sample_type",
     "is_qc", "injection_order", "injection_order_source", "spectrum_mode",
-    "instrument", "sample_group", "notes"
+    "instrument", "sample_group", "notes", "include"
   )]
+}
+
+#' Get a sheet's `include` values, defaulting to TRUE for every row if the
+#' column doesn't exist (e.g. a hand-made sheet, or one generated before
+#' this existed) or is blank for a given row — inclusion is opt-out, not
+#' opt-in, so absence never silently excludes anything.
+#'
+#' @param sheet Sample sheet rows (or a subset).
+get_included <- function(sheet) {
+  if (!"include" %in% names(sheet)) {
+    return(rep(TRUE, nrow(sheet)))
+  }
+  included <- as.logical(sheet$include)
+  included[is.na(included)] <- TRUE
+  included
 }
 
 #' Generate and write the sample sheet for a project.

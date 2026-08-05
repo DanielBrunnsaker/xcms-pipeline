@@ -1,30 +1,29 @@
 # IPO2-based optimization of xcms centWave parameters, and peak picking using
 # the optimized parameters, run independently per column x polarity group.
 #
-# Uses IPO2 (github.com/wmoldham/IPO2), not the original Bioconductor IPO:
-# - IPO2 targets the modern findChromPeaks()/CentWaveParam workflow directly.
-# - IPO routes through xcms's old xcmsSet() API, which broke against current
-#   xcms/BiocParallel (bpstopOnError could not be found).
-# Install with: renv::install("wmoldham/IPO2")
+# Uses IPO2 from gitlab.com/CarlBrunius/IPO2 — the package the reference
+# pipeline (github.com/MetaboComp/xcms_pipeline) itself depends on for its
+# optimXCMS() calls — not github.com/wmoldham/IPO2 (a same-named but
+# unrelated reimplementation we used earlier). The two differ fundamentally:
+# - wmoldham/IPO2 repeats a ~25-point central-composite design (response
+#   surface methodology) per iteration, for up to 50 iterations.
+# - CarlBrunius/IPO2 wraps nloptr::nloptr() (Nelder-Mead simplex by
+#   default), evaluating one candidate parameter set at a time based on the
+#   previous result — far fewer evaluations to converge, and it reuses
+#   IPO's original (pre-XCMS3) isotope-pair scoring, which degrades to a
+#   score of 0 for a degenerate/empty peak table rather than erroring.
+# Install with: renv::install("gitlab::CarlBrunius/IPO2") (also needs
+# nloptr, which this package's DESCRIPTION doesn't declare despite needing
+# it internally).
 #
-# IPO2's own scoring loop calls BiocParallel::bplapply() without a backend,
-# so it uses whatever's registered as default:
-# - MulticoreParam (fork-based) hit a known BiocParallel bug here ("wrong
-#   args for environment subassignment", github.com/Bioconductor/
-#   BiocParallel/issues/206), failing every worker in a batch identically.
-# - fork() doesn't exist on Windows anyway, so MulticoreParam would degrade
-#   to single-core there regardless.
-# - SnowParam (separate processes over local sockets) was tried next, but
-#   hangs indefinitely for IPO2's loop specifically under Docker/WSL2 on
-#   Windows (workers spawn fine, CPU stays busy, but nothing ever reports
-#   back — a socket-communication hang, not an error, so nothing here can
-#   catch or recover from it). Back to SerialParam: proven stable, just
-#   slower.
-# Our own findChromPeaks()/adjustRtime()/groupChromPeaks()/fillChromPeaks()
-# calls elsewhere are unaffected — they ran fine under SnowParam already,
-# and explicitly pass their own BPPARAM (bp_workers() in R/parallel.R),
-# overriding this default regardless of what's registered here.
-BiocParallel::register(BiocParallel::SerialParam(progressbar = TRUE))
+# Because evaluations are one-at-a-time (not a parallel batch), there's no
+# cross-evaluation parallelism to register here. The only parallelism
+# available is *within* one evaluation, across the subset's files, inside
+# its optimPP()'s plain findChromPeaks() call (no BPPARAM passed, so it
+# uses whatever's registered as session default) — the same shape as our
+# own with_bp_workers() calls elsewhere, which already run fine under
+# SnowParam. So register that here too, instead of forcing SerialParam.
+BiocParallel::register(bp_workers())
 
 #' Pick a small representative subset of files to run parameter optimization
 #' on.
@@ -144,15 +143,21 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #'
 #' Uses instrument/method-specific starting values and search-space bounds
 #' from `R/instrument_params.R` when the sheet's `instrument` column (and a
-#' matching config entry) is available, falling back to IPO2's own defaults
-#' otherwise.
+#' matching config entry) is available, falling back to
+#' `default_ipo2_search_space()` otherwise.
+#'
+#' Note: `IPO2::optimXCMS()` reads each evaluation's files itself
+#' (`readMSData(files, mode = "onDisk")`, no centroiding step) rather than
+#' taking a pre-loaded/pre-centroided object — a profile-mode file in the
+#' subset is optimized against uncentroided data. Warned below when
+#' detected; the actual peak-picking pass later still centroids correctly
+#' via `read_raw_data()`, only the search itself is affected.
 #'
 #' @param group_sheet Sample sheet rows for this group.
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
 #' @param ipo_subset_size Passed to `select_ipo_subset()` as `n` (files, or
 #'   batches to draw one file from each). Larger values improve batch
-#'   coverage in "global" scope but multiply IPO2's per-trial cost (see the
-#'   top of this file for IPO2's parallel-backend caveats).
+#'   coverage in "global" scope but multiply each evaluation's cost.
 #' @return An xcms::CentWaveParam with the optimized settings.
 run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   params_path <- file.path(out_dir, "ipo_params.rds")
@@ -170,41 +175,62 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
+  subset_modes <- get_spectrum_modes(group_sheet)[match(subset_files, group_sheet$filepath)]
+  if (any(subset_modes == "profile", na.rm = TRUE)) {
+    warning(
+      "Some IPO subset files are profile-mode; IPO2::optimXCMS() reads raw ",
+      "data itself with no centroiding step, so the search runs against ",
+      "uncentroided data for those files.",
+      call. = FALSE
+    )
+  }
+
   instrument <- group_instrument(group_sheet)
   instrument_config <- get_instrument_params(
     instrument, group_sheet$column[1], group_sheet$polarity[1]
   )
 
-  subset_modes <- get_spectrum_modes(group_sheet)[match(subset_files, group_sheet$filepath)]
-  raw_data <- read_raw_data(subset_files, subset_modes)
-  ipo_result <- if (!is.null(instrument_config)) {
+  search_space <- if (!is.null(instrument_config)) {
     message(sprintf(
       "Using instrument-specific search space for %s / %s / %s",
       instrument, group_sheet$column[1], group_sheet$polarity[1]
     ))
-    IPO2::optimize_centwave(
-      raw_data = raw_data,
-      parameter_list = build_ipo2_parameter_list(instrument_config),
-      out_dir = out_dir
-    )
+    build_ipo2_search_space(instrument_config)
   } else {
-    message("No instrument-specific config found; using IPO2 defaults.")
-    IPO2::optimize_centwave(raw_data = raw_data, out_dir = out_dir)
+    message("No instrument-specific config found; using generic default search space.")
+    default_ipo2_search_space()
   }
-  centwave_param <- ipo_result$best_cwp
+
+  optimum <- IPO2::optimXCMS(
+    files = subset_files,
+    cwParam = search_space$cwParam,
+    optimVars = search_space$optimVars,
+    upper = search_space$upper,
+    lower = search_space$lower,
+    algorithm = "NLOPT_LN_NELDERMEAD",
+    verbose = TRUE
+  )
+
+  centwave_param <- IPO2:::getCentWaveParams(
+    par = optimum$solution,
+    optimVars = search_space$optimVars,
+    customParam = IPO2:::cw2customParam(search_space$cwParam)
+  )
 
   saveRDS(centwave_param, params_path)
 
-  # Keep the full search history too, not just the winning params — useful
-  # for reviewing how the optimizer got there. Saved as both .rds (full
-  # fidelity, including the CentWaveParam object tried at each step) and
-  # .csv (the `cwp` column dropped, since a CentWaveParam object isn't
-  # CSV-representable, for quick eyeballing without loading R).
-  history <- ipo_result$history
-  saveRDS(history, file.path(out_dir, "ipo_history.rds"))
-  history_csv <- as.data.frame(history)
-  history_csv$cwp <- NULL
-  write.csv(history_csv, file.path(out_dir, "ipo_history.csv"), row.names = FALSE)
+  # optimXCMS()/nloptr doesn't expose a per-iteration trace the way the
+  # earlier (wmoldham/IPO2) search did -- this is the optimizer's final
+  # result summary, not a full search history, but kept under the same
+  # filenames for continuity.
+  result_summary <- stats::setNames(as.list(optimum$solution), search_space$optimVars)
+  result_summary$objective <- -optimum$objective # optimPP() minimizes -score
+  result_summary$iterations <- optimum$iterations
+  result_summary$status <- optimum$status
+  result_summary$message <- optimum$message
+
+  saveRDS(result_summary, file.path(out_dir, "ipo_history.rds"))
+  write.csv(as.data.frame(result_summary), file.path(out_dir, "ipo_history.csv"), row.names = FALSE)
 
   message(sprintf("Saved optimized params to: %s", params_path))
 

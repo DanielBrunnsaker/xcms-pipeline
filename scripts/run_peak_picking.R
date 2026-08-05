@@ -71,6 +71,12 @@ if (!file.exists(sheet_path)) {
 sample_sheet <- as.data.frame(readxl::read_excel(sheet_path))
 validate_sample_sheet(sample_sheet)
 
+included <- get_included(sample_sheet)
+if (any(!included)) {
+  message(sprintf("Excluding %d file(s) marked include=FALSE.", sum(!included)))
+}
+sample_sheet <- sample_sheet[included, , drop = FALSE]
+
 message(sprintf("IPO optimization scope: %s, subset size: %d\n", ipo_scope, ipo_subset_size))
 
 groups <- split(sample_sheet, paste(sample_sheet$column, sample_sheet$polarity, sep = "_"))

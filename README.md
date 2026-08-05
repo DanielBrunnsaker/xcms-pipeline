@@ -22,7 +22,9 @@ docker build -t xcms-pipeline .
 ```
 
 The build compiles the full Bioconductor stack (`xcms`, `mzR`, `MSnbase`, `IPO2`
-from GitHub) — expect it to take a while.
+from [gitlab.com/CarlBrunius/IPO2](https://gitlab.com/CarlBrunius/IPO2) — the
+same package the reference pipeline itself depends on) — expect it to take a
+while.
 
 ## Usage
 
@@ -37,7 +39,9 @@ docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/generate_sa
 Writes `/path/to/data/metadata/sample_sheet.xlsx`. Open it and review: fill in
 `sample_group`, `instrument` (must match an entry in `R/instrument_params.R`, e.g.
 `MRT`), and `notes`. Batch/plate/QC-type/injection-order are all derived from the
-filenames automatically.
+filenames automatically. Set `include` to `FALSE` for any row you want excluded
+from QC checking and peak picking without deleting it from the sheet — defaults
+to `TRUE`.
 
 **2. Check QC quality**
 ```
@@ -81,7 +85,9 @@ metadata/
   qc_quality_report.html      interactive QC charts
 output/<column>_<polarity>/
   ipo_params.rds              optimized centWave parameters
-  ipo_history.rds/.csv        full IPO2 optimization search history
+  ipo_history.rds/.csv        IPO2 optimization result summary (final
+                              solution, score, nloptr status/iterations —
+                              not a full per-iteration trace)
   peaks/xdata.rds              full aligned XCMSnExp object
   peaks/peak_table.csv        flat per-peak table (includes gap-filled peaks)
   feature_table.csv           aligned feature table: one row per feature, one column per sample

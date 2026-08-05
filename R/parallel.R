@@ -1,19 +1,21 @@
 # Shared parallel-backend configuration for BiocParallel-based steps.
 #
 # Uses SnowParam (real separate R processes over local sockets), not
-# MulticoreParam (fork-based). Two reasons: (1) MulticoreParam is known to
-# break IPO2's own loop in this environment ("wrong args for environment
-# subassignment") and (2) fork() doesn't exist on Windows, so MulticoreParam
-# silently degrades to single-core there regardless — SnowParam is what
-# actually gets real parallelism cross-platform (macOS/Linux/Windows alike).
+# MulticoreParam (fork-based). Two reasons: (1) MulticoreParam previously
+# hit a known BiocParallel bug ("wrong args for environment subassignment")
+# and (2) fork() doesn't exist on Windows, so MulticoreParam silently
+# degrades to single-core there regardless — SnowParam is what actually
+# gets real parallelism cross-platform (macOS/Linux/Windows alike).
 #
-# IPO2's own internal optimization loop is a separate concern: it doesn't
-# accept a BPPARAM argument directly, so it's controlled by whatever backend
-# is registered as the session default (see R/peak_picking.R) rather than
-# by bp_workers() below.
+# IPO2::optimXCMS()'s internal findChromPeaks() call also doesn't accept a
+# BPPARAM argument directly, so it's controlled by whatever backend is
+# registered as the session default (see R/peak_picking.R, which registers
+# bp_workers() itself for that reason) rather than by bp_workers() below
+# directly.
 
 #' Number of parallel workers to use for peak-picking/alignment steps (and
-#' IPO2's loop, via the session default registered in R/peak_picking.R).
+#' IPO2::optimXCMS()'s internal findChromPeaks() call, via the session
+#' default registered in R/peak_picking.R).
 #'
 #' Reads the `XCMS_PIPELINE_CORES` env var if set (e.g.
 #' `docker run -e XCMS_PIPELINE_CORES=8 ...`); otherwise defaults to all
