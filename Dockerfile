@@ -35,6 +35,12 @@ COPY docker/install_packages.R ./docker/install_packages.R
 # Sandboxing protects a shared host library from a project; redundant inside
 # an already-isolated container, and avoids permission-write noise.
 ENV RENV_CONFIG_SANDBOX_ENABLED=FALSE
+
+# The base image's own Rprofile pre-loads BiocManager before renv activates
+# this project, which renv's namespace check otherwise flags on every
+# status()/snapshot() call. Harmless and structural to the base image (not
+# fixable from here), so silenced rather than left as recurring noise.
+ENV RENV_CONFIG_NAMESPACES_CHECK=FALSE
 RUN Rscript -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
 RUN Rscript docker/install_packages.R
 

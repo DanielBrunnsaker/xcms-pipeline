@@ -36,6 +36,39 @@ BiocParallel::register(bp_workers())
 # reason; xcms needs the same treatment here.
 library(xcms)
 
+# IPO2's optimPP() reads its subset files itself (readMSData() +
+# findChromPeaks()) with no centroiding step in between -- fine for
+# centroid-mode data, but the search runs against uncentroided data
+# otherwise. A temp-mzML round trip was tried first (centroid via
+# read_raw_data(), write out, point optimXCMS() at the temp files) but the
+# written files came back with zero MS1 spectra on reread -- a real bug
+# somewhere in MSnbase's write/read cycle for this object shape, not
+# something to chase blind without a live environment. Patched here
+# instead: reuses the exact pickPeaks()-on-OnDiskMSnExp lazy-centroiding
+# this pipeline already relies on successfully elsewhere (read_raw_data()),
+# applied conditionally via a session option run_ipo_optimization() sets
+# before each optimXCMS() call -- no disk round trip, no new mechanism.
+patched_optimPP <- function(x0, files, optimVars, customParam, verbose = TRUE) {
+  if (verbose) cat("\nParameter values:", x0, "\n")
+
+  cwParam <- getCentWaveParams(par = x0, optimVars = optimVars, customParam = customParam)
+
+  raw_data <- readMSData(files = files, mode = "onDisk")
+  if (isTRUE(getOption("xcms_pipeline.centroid_ipo_input", FALSE))) {
+    raw_data <- pickPeaks(raw_data)
+  }
+  xchr <- findChromPeaks(raw_data, param = cwParam)
+
+  xset <- as(xchr, "xcmsSet")
+  score <- suppressMessages(IPO2:::calcPPS(xset, "IPO")[5])
+
+  if (verbose) cat("\nIPO score:", score, "\n")
+
+  -score
+}
+environment(patched_optimPP) <- asNamespace("IPO2")
+assignInNamespace("optimPP", patched_optimPP, ns = "IPO2")
+
 #' Pick a small representative subset of files to run parameter optimization
 #' on.
 #'
@@ -167,42 +200,6 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
   subset_files
 }
 
-#' Write a centroided copy of any profile-mode files to temporary mzML
-#' files, for handing to `IPO2::optimXCMS()` — it reads its `files` itself
-#' (`readMSData(files, mode = "onDisk")`) with no centroiding step, so
-#' without this a profile-mode file gets optimized against uncentroided
-#' data. Already-centroid (or unknown-mode) files pass through unchanged.
-#'
-#' @param filepaths Character vector of mzML file paths.
-#' @param spectrum_modes Character vector ("profile"/"centroid"/NA), same
-#'   length/order as `filepaths`.
-#' @return List(files = paths to actually use, cleanup = function to call
-#'   afterward to remove any temp files created).
-centroid_for_ipo <- function(filepaths, spectrum_modes) {
-  is_profile <- spectrum_modes %in% "profile"
-  if (!any(is_profile)) {
-    return(list(files = filepaths, cleanup = function() invisible(NULL)))
-  }
-
-  message(sprintf(
-    "Centroiding %d profile-mode file(s) to temporary mzML for IPO optimization...",
-    sum(is_profile)
-  ))
-
-  out_files <- filepaths
-  tmp_files <- character(0)
-
-  for (i in which(is_profile)) {
-    raw <- MSnbase::pickPeaks(MSnbase::readMSData(filepaths[i], mode = "inMemory"))
-    tmp_path <- tempfile(fileext = ".mzML")
-    MSnbase::writeMSData(raw, file = tmp_path)
-    out_files[i] <- tmp_path
-    tmp_files <- c(tmp_files, tmp_path)
-  }
-
-  list(files = out_files, cleanup = function() unlink(tmp_files))
-}
-
 #' Run IPO2 optimization for one column x polarity group, caching the result
 #' to disk so re-running peak picking doesn't re-optimize from scratch.
 #'
@@ -210,6 +207,11 @@ centroid_for_ipo <- function(filepaths, spectrum_modes) {
 #' from `R/instrument_params.R` when the sheet's `instrument` column (and a
 #' matching config entry) is available, falling back to
 #' `default_ipo2_search_space()` otherwise.
+#'
+#' Sets the `xcms_pipeline.centroid_ipo_input` option before calling
+#' `optimXCMS()` if any subset file is profile-mode -- read by
+#' `patched_optimPP()` (top of this file) to centroid in-place, since
+#' `optimXCMS()` otherwise reads its files with no centroiding step at all.
 #'
 #' @param group_sheet Sample sheet rows for this group.
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
@@ -234,8 +236,12 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   subset_modes <- get_spectrum_modes(group_sheet)[match(subset_files, group_sheet$filepath)]
-  centroided <- centroid_for_ipo(subset_files, subset_modes)
-  on.exit(centroided$cleanup(), add = TRUE)
+  needs_centroiding <- any(subset_modes == "profile", na.rm = TRUE)
+  if (needs_centroiding) {
+    message("Some IPO subset files are profile-mode; centroiding them for the search (see patched_optimPP() at the top of this file).")
+  }
+  old_opts <- options(xcms_pipeline.centroid_ipo_input = needs_centroiding)
+  on.exit(options(old_opts), add = TRUE)
 
   instrument <- group_instrument(group_sheet)
   instrument_config <- get_instrument_params(
@@ -254,7 +260,7 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   }
 
   optimum <- IPO2::optimXCMS(
-    files = centroided$files,
+    files = subset_files,
     cwParam = search_space$cwParam,
     optimVars = search_space$optimVars,
     upper = search_space$upper,
