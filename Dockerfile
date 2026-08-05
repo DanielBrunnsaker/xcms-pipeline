@@ -1,9 +1,11 @@
 # xcms-pipeline, containerized to freeze the exact R/Bioconductor
 # environment recorded in renv.lock (R 4.6.0, Bioconductor 3.23 devel,
-# including IPO2 from gitlab.com/CarlBrunius/IPO2) — avoids re-fighting the
-# version-specific issues solved during initial setup (IPO's bpstopOnError
-# incompatibility, a BiocParallel MulticoreParam worker bug, mzR/Rcpp ABI
-# mismatches).
+# including IPO2 from gitlab.com/CarlBrunius/IPO2 for centWave optimization,
+# and the legacy Bioconductor IPO package for retention-time/correspondence
+# optimization) — avoids re-fighting the version-specific issues solved
+# during initial setup (IPO's centWave optimizer hitting a BiocParallel
+# bpstopOnError incompatibility, a separate BiocParallel MulticoreParam
+# worker bug, mzR/Rcpp ABI mismatches).
 #
 # Build:
 #   docker build -t xcms-pipeline .

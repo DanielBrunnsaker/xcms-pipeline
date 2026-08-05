@@ -16,8 +16,10 @@
 #
 # When restore() fails (e.g. an unavailable devel-era version):
 # 1. Patch the specific packages known to hit this (Bioconductor core +
-#    IPO2, from gitlab.com/CarlBrunius/IPO2) with whatever devel currently
-#    serves.
+#    IPO2, from gitlab.com/CarlBrunius/IPO2, + IPO, the legacy Bioconductor
+#    package used for retention-time/correspondence optimization -- a
+#    separately-named package from IPO2, installs side by side) with
+#    whatever devel currently serves.
 # 2. Retry restore() — a single failed attempt can abort before reaching
 #    later-queued packages, silently leaving them uninstalled without
 #    naming them in the error.
@@ -50,7 +52,7 @@ if (!restore_ok) {
     install.packages("BiocManager", repos = "https://cloud.r-project.org")
   }
 
-  core_bioc_pkgs <- c("BiocParallel", "mzR", "MSnbase", "xcms")
+  core_bioc_pkgs <- c("BiocParallel", "mzR", "MSnbase", "xcms", "IPO")
   missing_bioc <- intersect(core_bioc_pkgs, setdiff(original_locked_pkgs, rownames(installed.packages())))
   if (length(missing_bioc) > 0) {
     message(sprintf("Installing current devel versions of: %s", paste(missing_bioc, collapse = ", ")))

@@ -22,9 +22,10 @@ docker build -t xcms-pipeline .
 ```
 
 The build compiles the full Bioconductor stack (`xcms`, `mzR`, `MSnbase`, `IPO2`
-from [gitlab.com/CarlBrunius/IPO2](https://gitlab.com/CarlBrunius/IPO2) — the
-same package the reference pipeline itself depends on) — expect it to take a
-while.
+from [gitlab.com/CarlBrunius/IPO2](https://gitlab.com/CarlBrunius/IPO2) for
+centWave optimization — the same package the reference pipeline itself depends
+on — and the legacy Bioconductor `IPO` package for retention-time/correspondence
+optimization) — expect it to take a while.
 
 ## Usage
 
@@ -61,10 +62,18 @@ docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/check_qc_qu
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data
 ```
 Optional arguments: `[ipo_scope]` (`global` default, or `batch` for a separate IPO
-optimization per batch) and `[ipo_subset_size]` (default `4` — how many files/batches
-IPO2 optimizes against):
+optimization per batch), `[ipo_subset_size]` (default `4` — how many files/batches
+IPO2 optimizes against), and `[ipo_fresh]` (default `false`):
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 8
+```
+If interrupted mid-search (killed container, crash, power loss), each group/batch's
+IPO2 optimization checkpoints its best result so far to `ipo_checkpoint.rds` —
+re-running resumes from that checkpoint rather than starting the ~100-evaluation
+search over. Pass `true` for `[ipo_fresh]` to ignore any cached result or checkpoint
+and re-optimize every group/batch from scratch instead:
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data global 4 true
 ```
 
 By default, parallel steps use all detected cores minus 2. Override with the
@@ -85,19 +94,29 @@ metadata/
   qc_quality_report.html      interactive QC charts
 output/<column>_<polarity>/
   ipo_params.rds              optimized centWave parameters
+  ipo_checkpoint.rds          mid-search checkpoint (deleted on success;
+                              only present if interrupted partway through)
   ipo_history.rds/.csv        IPO2 optimization result summary (final
                               solution, score, nloptr status/iterations —
                               not a full per-iteration trace)
+  retgroup_params.rds          optimized obiwarp + correspondence bandwidth/
+                              bin-size (legacy IPO::optimizeRetGroup())
+  retgroup_history.rds        full optimizeRetGroup() result object
   peaks/xdata.rds              full aligned XCMSnExp object
   peaks/peak_table.csv        flat per-peak table (includes gap-filled peaks)
   feature_table.csv           aligned feature table: one row per feature, one column per sample
 ```
 
+`retgroup_params.rds` is cached the same way as `ipo_params.rds` — delete it to
+force that group's retention-time/correspondence search to redo. It doesn't
+currently participate in `[ipo_fresh]`/checkpointing, since it's a first
+integration of `IPO::optimizeRetGroup()` untested outside this project so far.
+
 ## Notes
 
 - Every script is re-runnable: the sample sheet and QC steps back up the sheet
-  before overwriting it, and peak picking caches IPO2 results so a re-run doesn't
-  re-optimize from scratch.
+  before overwriting it, and peak picking caches IPO2 results (and checkpoints
+  mid-search progress) so a re-run doesn't re-optimize from scratch.
 - `R/instrument_params.R` holds per-instrument/column/polarity CentWave starting
   values and IPO2 search bounds — edit it to add or tune instruments.
 - Rebuild the Docker image after pulling any code change; a container doesn't
