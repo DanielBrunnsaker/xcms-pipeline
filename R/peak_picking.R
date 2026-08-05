@@ -25,6 +25,17 @@
 # SnowParam. So register that here too, instead of forcing SerialParam.
 BiocParallel::register(bp_workers())
 
+# IPO2's internals (getCentWaveParams(), optimPP()) call CentWaveParam(),
+# findChromPeaks(), and readMSData() unqualified, expecting xcms/MSnbase to
+# be attached to the search path -- true for a normal library(IPO2) session
+# (Depends: xcms gets attached automatically), but NOT true here: we only
+# ever call IPO2::optimXCMS() via `::`, which loads xcms as a namespace
+# only, without attaching it (Depends only auto-attaches on a real
+# library()/require() of the depending package, not on `::` access).
+# MSnbase already gets attached this way via R/spectrum_mode.R for the same
+# reason; xcms needs the same treatment here.
+library(xcms)
+
 #' Pick a small representative subset of files to run parameter optimization
 #' on.
 #'
@@ -51,6 +62,12 @@ BiocParallel::register(bp_workers())
 #' - Single batch (e.g. "batch" scope): picks spread evenly across
 #'   `injection_order` within that batch, as before.
 #'
+#' Within whichever tier gets used, centroid-mode files are preferred over
+#' profile-mode ones (IPO2::optimXCMS() reads files itself with no
+#' centroiding step) -- but only when enough centroid candidates exist to
+#' still fill the request; a profile-only tier is used as-is rather than
+#' handing the optimizer fewer files than asked for.
+#'
 #' QC rows flagged by `scripts/check_qc_quality.R` (`qc_flagged == TRUE`)
 #' are excluded — a missed injection/empty vial should never be the
 #' "representative" QC. If that check was never run, every QC row counts.
@@ -61,6 +78,17 @@ BiocParallel::register(bp_workers())
 #' @param min_qc Minimum number of QC rows required before they're considered
 #'   "enough" to use (below this, fall through to the next tier).
 select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
+  # IPO2::optimXCMS() reads its subset files itself with no centroiding
+  # step, so a profile-mode file gets optimized against uncentroided data.
+  # Prefer centroid-mode candidates within whichever tier gets used, but
+  # only when there are enough of them to still fill the request -- if a
+  # tier is profile-only (or short), fall back to using it as-is rather
+  # than picking fewer files than requested.
+  prefer_centroid <- function(rows, n) {
+    is_profile <- get_spectrum_modes(rows) %in% "profile"
+    if (sum(!is_profile) >= n) rows[!is_profile, , drop = FALSE] else rows
+  }
+
   pick_spread <- function(rows, k) {
     k <- min(k, nrow(rows))
     idx <- unique(round(seq(1, nrow(rows), length.out = k)))
@@ -110,15 +138,16 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 
   sqc_rows <- group_sheet[group_sheet$sample_type == "sQC", , drop = FALSE]
   if (nrow(sqc_rows) >= min_qc) {
-    return(pick_representative(sqc_rows, n))
+    return(pick_representative(prefer_centroid(sqc_rows, n), n))
   }
 
   ltqc_rows <- group_sheet[group_sheet$sample_type == "ltQC", , drop = FALSE]
   if (nrow(ltqc_rows) >= min_qc) {
-    return(pick_representative(ltqc_rows, n))
+    return(pick_representative(prefer_centroid(ltqc_rows, n), n))
   }
 
   regular_rows <- group_sheet[group_sheet$sample_type == "Sample", , drop = FALSE]
+  regular_rows <- prefer_centroid(regular_rows, n)
   n_regular <- min(n, nrow(regular_rows))
   subset_files <- regular_rows$filepath[sample(nrow(regular_rows), n_regular)]
 
@@ -138,6 +167,42 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
   subset_files
 }
 
+#' Write a centroided copy of any profile-mode files to temporary mzML
+#' files, for handing to `IPO2::optimXCMS()` — it reads its `files` itself
+#' (`readMSData(files, mode = "onDisk")`) with no centroiding step, so
+#' without this a profile-mode file gets optimized against uncentroided
+#' data. Already-centroid (or unknown-mode) files pass through unchanged.
+#'
+#' @param filepaths Character vector of mzML file paths.
+#' @param spectrum_modes Character vector ("profile"/"centroid"/NA), same
+#'   length/order as `filepaths`.
+#' @return List(files = paths to actually use, cleanup = function to call
+#'   afterward to remove any temp files created).
+centroid_for_ipo <- function(filepaths, spectrum_modes) {
+  is_profile <- spectrum_modes %in% "profile"
+  if (!any(is_profile)) {
+    return(list(files = filepaths, cleanup = function() invisible(NULL)))
+  }
+
+  message(sprintf(
+    "Centroiding %d profile-mode file(s) to temporary mzML for IPO optimization...",
+    sum(is_profile)
+  ))
+
+  out_files <- filepaths
+  tmp_files <- character(0)
+
+  for (i in which(is_profile)) {
+    raw <- MSnbase::pickPeaks(MSnbase::readMSData(filepaths[i], mode = "inMemory"))
+    tmp_path <- tempfile(fileext = ".mzML")
+    MSnbase::writeMSData(raw, file = tmp_path)
+    out_files[i] <- tmp_path
+    tmp_files <- c(tmp_files, tmp_path)
+  }
+
+  list(files = out_files, cleanup = function() unlink(tmp_files))
+}
+
 #' Run IPO2 optimization for one column x polarity group, caching the result
 #' to disk so re-running peak picking doesn't re-optimize from scratch.
 #'
@@ -145,13 +210,6 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #' from `R/instrument_params.R` when the sheet's `instrument` column (and a
 #' matching config entry) is available, falling back to
 #' `default_ipo2_search_space()` otherwise.
-#'
-#' Note: `IPO2::optimXCMS()` reads each evaluation's files itself
-#' (`readMSData(files, mode = "onDisk")`, no centroiding step) rather than
-#' taking a pre-loaded/pre-centroided object — a profile-mode file in the
-#' subset is optimized against uncentroided data. Warned below when
-#' detected; the actual peak-picking pass later still centroids correctly
-#' via `read_raw_data()`, only the search itself is affected.
 #'
 #' @param group_sheet Sample sheet rows for this group.
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
@@ -176,14 +234,8 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   subset_modes <- get_spectrum_modes(group_sheet)[match(subset_files, group_sheet$filepath)]
-  if (any(subset_modes == "profile", na.rm = TRUE)) {
-    warning(
-      "Some IPO subset files are profile-mode; IPO2::optimXCMS() reads raw ",
-      "data itself with no centroiding step, so the search runs against ",
-      "uncentroided data for those files.",
-      call. = FALSE
-    )
-  }
+  centroided <- centroid_for_ipo(subset_files, subset_modes)
+  on.exit(centroided$cleanup(), add = TRUE)
 
   instrument <- group_instrument(group_sheet)
   instrument_config <- get_instrument_params(
@@ -202,7 +254,7 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4) {
   }
 
   optimum <- IPO2::optimXCMS(
-    files = subset_files,
+    files = centroided$files,
     cwParam = search_space$cwParam,
     optimVars = search_space$optimVars,
     upper = search_space$upper,
