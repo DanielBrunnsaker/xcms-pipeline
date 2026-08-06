@@ -18,9 +18,11 @@
 # - batch: a separate optimization per batch (captures batch-to-batch
 #   drift, at the cost of running IPO's search once per batch). Each
 #   batch's params are still saved separately
-#   (<folder>/output/<column>_<polarity>/<batch>/), but peak-picked results
-#   are combined via xcms::c() before alignment — always exactly one
-#   aligned feature table per group, regardless of scope.
+#   (<folder>/output/<column>_<polarity>/<batch>/), and also collected
+#   side by side in <folder>/output/<column>_<polarity>/
+#   batch_centwave_params.csv for a quick per-batch comparison. Peak-picked
+#   results are combined via xcms::c() before alignment — always exactly
+#   one aligned feature table per group, regardless of scope.
 #
 # [ipo_subset_size] (default 4): how many files IPO2 optimizes against
 # (select_ipo_subset() in R/peak_picking.R). In "global" scope spanning
@@ -106,6 +108,7 @@ for (group_name in names(groups)) {
   if (ipo_scope == "batch") {
     batch_sheets <- split(group_sheet, group_sheet$batch)
     picked_list <- list()
+    batch_params_rows <- list()
 
     for (batch_name in names(batch_sheets)) {
       batch_sheet <- batch_sheets[[batch_name]]
@@ -119,7 +122,21 @@ for (group_name in names(groups)) {
       picked_list[[batch_name]] <- pick_peaks(
         batch_sheet$filepath, centwave_param, get_spectrum_modes(batch_sheet)
       )
+      batch_params_rows[[batch_name]] <- cbind(
+        batch = batch_name, centwave_param_to_row(centwave_param)
+      )
     }
+
+    # Consolidated, human-readable view of which centWave params were
+    # actually used per batch -- each batch's own ipo_params.rds/
+    # ipo_history.csv already has this individually, nested under its own
+    # subfolder; this collects them side by side in one file (same idea as
+    # the reference pipeline's own opt_params.csv).
+    write.csv(
+      do.call(rbind, batch_params_rows),
+      file.path(out_dir, "batch_centwave_params.csv"),
+      row.names = FALSE
+    )
 
     xdata <- do.call(xcms::c, picked_list)
     ordered_sheet <- do.call(rbind, batch_sheets)

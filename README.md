@@ -93,12 +93,16 @@ metadata/
   sample_sheet.xlsx          reviewed sample metadata
   qc_quality_report.html      interactive QC charts
 output/<column>_<polarity>/
-  ipo_params.rds              optimized centWave parameters
+  ipo_params.rds              optimized centWave parameters (global scope only
+                              -- under <batch>/ipo_params.rds per batch instead
+                              in batch scope)
   ipo_checkpoint.rds          mid-search checkpoint (deleted on success;
                               only present if interrupted partway through)
   ipo_history.rds/.csv        IPO2 optimization result summary (final
                               solution, score, nloptr status/iterations —
                               not a full per-iteration trace)
+  batch_centwave_params.csv   batch scope only -- every batch's actual
+                              centWave params side by side, one row each
   retgroup_params.rds          optimized obiwarp + correspondence bandwidth/
                               bin-size (legacy IPO::optimizeRetGroup())
   retgroup_history.rds        full optimizeRetGroup() result object

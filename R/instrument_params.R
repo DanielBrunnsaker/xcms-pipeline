@@ -139,6 +139,27 @@ get_instrument_params <- function(instrument, column, polarity) {
   NULL
 }
 
+#' Flatten a CentWaveParam into a single-row data.frame -- the inverse of
+#' `build_centwave_param()`, used for human-readable summaries of which
+#' parameters were actually used where (e.g. one row per batch, see
+#' scripts/run_peak_picking.R's "batch" scope).
+#'
+#' @param centwave_param An xcms::CentWaveParam.
+#' @return A one-row data.frame.
+centwave_param_to_row <- function(centwave_param) {
+  data.frame(
+    ppm = centwave_param@ppm,
+    min_peakwidth = centwave_param@peakwidth[1],
+    max_peakwidth = centwave_param@peakwidth[2],
+    snthresh = centwave_param@snthresh,
+    prefilter_k = centwave_param@prefilter[1],
+    prefilter_int = centwave_param@prefilter[2],
+    mzdiff = centwave_param@mzdiff,
+    noise = centwave_param@noise,
+    stringsAsFactors = FALSE
+  )
+}
+
 #' Build a starting-point CentWaveParam from an instrument config's
 #' starting_values. Fields not covered by starting_values (mzCenterFun,
 #' integrate, fitgauss, verboseColumns, roiList, firstBaselineCheck,
