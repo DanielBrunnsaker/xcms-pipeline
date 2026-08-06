@@ -21,7 +21,7 @@
 #   (<folder>/output/<column>_<polarity>/<batch>/), and also collected
 #   side by side in <folder>/output/<column>_<polarity>/
 #   batch_centwave_params.csv for a quick per-batch comparison. Peak-picked
-#   results are combined via xcms::c() before alignment — always exactly
+#   results are combined via c() before alignment — always exactly
 #   one aligned feature table per group, regardless of scope.
 #
 # [ipo_subset_size] (default 4): how many files IPO2 optimizes against
@@ -138,7 +138,13 @@ for (group_name in names(groups)) {
       row.names = FALSE
     )
 
-    xdata <- do.call(xcms::c, picked_list)
+    # Plain c(), not xcms::c() -- xcms registers a combine method for
+    # XCMSnExp on the shared "c" generic (S4 method dispatch finds it
+    # regardless of which package registered it), but doesn't export a
+    # symbol literally named "c" from its own namespace, so `xcms::c`
+    # itself fails ("'c' is not an exported object from 'namespace:xcms'")
+    # even though plain c(...) resolves correctly via dispatch.
+    xdata <- do.call(c, picked_list)
     ordered_sheet <- do.call(rbind, batch_sheets)
   } else {
     message(sprintf(

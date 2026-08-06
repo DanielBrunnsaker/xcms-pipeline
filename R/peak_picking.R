@@ -409,7 +409,7 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
 #' see that file's header comment.
 #'
 #' @param xdata XCMSnExp with peaks already picked (via `pick_peaks()`, or
-#'   several combined with `xcms::c()`).
+#'   several combined with `c()`).
 #' @param sample_types Character vector of `sample_type` values, one per
 #'   file, in the same order as files in `xdata`.
 #' @param retgroup_params Optional result of `run_retgroup_optimization()`
@@ -450,6 +450,12 @@ align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL) {
 build_feature_table <- function(xdata, sample_names) {
   feature_defs <- as.data.frame(xcms::featureDefinitions(xdata))
   feature_defs$peakidx <- NULL
+
+  # xcms names every feature (FT0001, FT0002, ...) as row names rather than
+  # a regular column -- save_peak_picking_outputs() writes with
+  # row.names = FALSE, so without pulling this out explicitly there'd be no
+  # stable ID to trace a row back to peak_table.csv/xdata.rds by.
+  feature_defs <- cbind(feature = rownames(feature_defs), feature_defs)
 
   feature_values <- as.data.frame(xcms::featureValues(xdata, value = "into"))
   colnames(feature_values) <- sample_names
