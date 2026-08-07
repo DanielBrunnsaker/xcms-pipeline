@@ -126,21 +126,6 @@ group's retention-time/correspondence search to redo. It doesn't checkpoint
 mid-search yet, unlike the centWave search — `IPO::optimizeRetGroup()` is a
 first integration, untested outside this project so far.
 
-## Tests
-
-Unit tests cover the pure/deterministic logic (filename parsing, sample sheet
-handling, instrument param lookup, IPO subset selection) — not the parts that
-need real mzML files or a live Bioconductor run. No Docker required, just
-`testthat`:
-```
-install.packages("testthat")   # one-time
-Rscript tests/testthat.R
-```
-Also runs inside the image if you'd rather not install anything locally:
-```
-docker run --rm xcms-pipeline Rscript tests/testthat.R
-```
-
 ## Notes
 
 - Every script is re-runnable: the sample sheet and QC steps back up the sheet
