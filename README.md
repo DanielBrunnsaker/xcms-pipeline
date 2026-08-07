@@ -84,7 +84,17 @@ Lands back on the host under `/path/to/data/` (never baked into the image):
 metadata/
   sample_sheet.xlsx           reviewed sample metadata
   qc_quality_report.html      interactive QC charts
+output/
+  sample_sheet_snapshot_<timestamp>.xlsx   the sheet exactly as used for
+                                            this run -- edit and rerun the
+                                            live sheet freely, this stays
+                                            put so old output stays traceable
+                                            (also copied into each group's
+                                            own folder below, so a group's
+                                            output is traceable on its own
+                                            even if copied elsewhere)
 output/<column>_<polarity>/
+  sample_sheet_snapshot_<timestamp>.xlsx   same file, copied here too
   ipo_params.rds               optimized centWave params (per-batch under
                                 <batch>/ in batch scope)
   ipo_checkpoint.rds            mid-search checkpoint, only present if

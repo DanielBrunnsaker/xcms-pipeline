@@ -63,6 +63,32 @@ test_that("parse_mzml_filename errors on conflicting plate tokens", {
   )
 })
 
+test_that("parse_mzml_filename discards ignorable extra text appended to batch", {
+  result <- parse_mzml_filename("2024-06-10_B12W24_240610_plates_N29-32_RP_NEG_ltQC01_136.mzML")
+  expect_equal(result$batch, "B12W24")
+  expect_equal(result$column, "RP")
+  expect_equal(result$polarity, "NEG")
+  expect_equal(result$sample_name, "ltQC01")
+  expect_equal(result$injection_order, 136L)
+})
+
+test_that("parse_mzml_filename discards ignorable extra text appended to sample name", {
+  result <- parse_mzml_filename("2024-03-22_B1W12_RP_NEG_SolvBlank-P2-02_ExtraInjection_012.mzML")
+  expect_equal(result$batch, "B1W12")
+  expect_equal(result$sample_name, "SolvBlank-P2-02")
+  expect_equal(result$sample_type, "Blank")
+  expect_equal(result$injection_order, 12L)
+})
+
+test_that("parse_mzml_filename discards extra text on both batch and sample name at once", {
+  result <- parse_mzml_filename(
+    "2024-06-10_B12W24_240610_plates_N29-32_RP_NEG_Plate_N29-LV2006097728_203.mzML"
+  )
+  expect_equal(result$batch, "B12W24")
+  expect_equal(result$sample_name, "N29-LV2006097728")
+  expect_equal(result$injection_order, 203L)
+})
+
 test_that("parse_mzml_filename errors on a non-matching filename", {
   expect_error(
     parse_mzml_filename("not_a_valid_filename.mzML"),

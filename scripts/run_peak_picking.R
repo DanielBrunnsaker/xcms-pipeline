@@ -79,6 +79,18 @@ if (!file.exists(sheet_path)) {
 sample_sheet <- as.data.frame(readxl::read_excel(sheet_path))
 validate_sample_sheet(sample_sheet)
 
+# Snapshot the sheet exactly as used for this run -- so a feature_table.csv
+# from months ago can be traced back to precisely what it was built from,
+# even if the live sample_sheet.xlsx gets edited and rerun later. One
+# snapshot per run (not per group): every group in this run shares the same
+# sheet state.
+dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
+sheet_snapshot_path <- file.path(
+  output_root, sprintf("sample_sheet_snapshot_%s.xlsx", format(Sys.time(), "%Y%m%d_%H%M%S"))
+)
+file.copy(sheet_path, sheet_snapshot_path)
+message(sprintf("Sample sheet snapshot for this run: %s", sheet_snapshot_path))
+
 included <- get_included(sample_sheet)
 if (any(!included)) {
   message(sprintf("Excluding %d file(s) marked include=FALSE.", sum(!included)))
@@ -94,6 +106,12 @@ groups <- split(sample_sheet, paste(sample_sheet$column, sample_sheet$polarity, 
 for (group_name in names(groups)) {
   group_sheet <- groups[[group_name]]
   out_dir <- file.path(output_root, group_name)
+
+  # Same snapshot as the root-level one (copied, not regenerated, so every
+  # copy is byte-identical) -- keeps this group's folder self-contained and
+  # traceable even if it's later copied/archived on its own.
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  file.copy(sheet_snapshot_path, file.path(out_dir, basename(sheet_snapshot_path)))
 
   if (ipo_scope == "batch") {
     batch_sheets <- split(group_sheet, group_sheet$batch)

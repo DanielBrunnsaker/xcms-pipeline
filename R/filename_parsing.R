@@ -5,16 +5,30 @@
 # - sample-name may be a real sample ID, a QC type (sQC/ltQC), or a blank (SolvBlank)
 # - "Plate<N>" may appear appended to batch, or prepended to sample-name
 # - a literal "Plate_" marker is stripped before parsing (see SUPERFLUOUS_FILENAME_MARKERS)
+# - batch and sample-name can have extra "_"-delimited junk appended (e.g.
+#   "B12W24_240610_plates_N29-32", "SolvBlank-P2-02_ExtraInjection") --
+#   confirmed ignorable, so only the first "_"-segment of each is kept (see
+#   first_underscore_segment()). Column/polarity/injection_order stay
+#   single-token: POS|NEG anchors the match, so batch/sample-name's greedy
+#   capture backtracks to the correct split regardless of how much extra
+#   junk they carry.
 
 MZML_FILENAME_PATTERN <- paste0(
   "^(\\d{4}-\\d{2}-\\d{2})_",  # date
-  "([^_]+)_",                 # batch
+  "(.+)_",                    # batch (+ any ignorable extra "_" segments)
   "([^_]+)_",                 # column
   "(POS|NEG)_",                # polarity
-  "([^_]+)_",                  # sample name (or sQC/ltQC)
+  "(.+)_",                     # sample name (+ any ignorable extra "_" segments)
   "(\\d+)",                    # injection order
   "(?:\\.raw)?\\.mzml$"        # ".raw" before the extension is optional
 )
+
+#' Keep only the first "_"-delimited segment of a field -- batch and
+#' sample-name can carry extra, confirmed-ignorable descriptive text after
+#' the real value (see MZML_FILENAME_PATTERN's header note).
+first_underscore_segment <- function(field) {
+  strsplit(field, "_", fixed = TRUE)[[1]][1]
+}
 
 # TODO: revisit — assumed to carry no information (e.g. whether the ID
 # after it, like "N10", ever matters), not a confirmed-safe assumption.
@@ -84,8 +98,8 @@ parse_mzml_filename <- function(filename) {
     stop(sprintf("Filename does not match expected pattern: %s", filename), call. = FALSE)
   }
 
-  batch_extract <- extract_plate(m[3])
-  sample_extract <- extract_plate(m[6])
+  batch_extract <- extract_plate(first_underscore_segment(m[3]))
+  sample_extract <- extract_plate(first_underscore_segment(m[6]))
 
   if (!is.na(batch_extract$plate) && !is.na(sample_extract$plate) &&
       batch_extract$plate != sample_extract$plate) {
