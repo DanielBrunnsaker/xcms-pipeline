@@ -127,14 +127,59 @@ parse_mzml_filename <- function(filename) {
     sample_type = sample_type,
     is_qc = sample_type %in% c("sQC", "ltQC"),
     injection_order = as.integer(m[7]),
+    needs_review = FALSE,
+    parse_error = NA_character_,
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Build a placeholder row for a file whose name didn't match
+#' MZML_FILENAME_PATTERN at all -- real-world filenames from an active lab
+#' process will keep producing one-off variants no regex can fully
+#' anticipate (extra "_rerun"/"_EXTRA" suffixes, a missing injection order,
+#' ...). Rather than aborting the whole sheet generation on one bad
+#' filename, this keeps the file in the sheet with just its name, flagged
+#' via `needs_review`/`parse_error` for manual completion, matching this
+#' file's stated philosophy: fail loudly, don't silently mis-parse -- but
+#' "loudly" now means "visible in the sheet", not "the whole run aborts".
+#'
+#' The leading date is still attempted (its format is unambiguous and every
+#' variant seen so far keeps it well-formed) -- everything else is left
+#' blank rather than guessed.
+#'
+#' @param filename Character scalar, just the basename.
+#' @param error_message What parse_mzml_filename() failed with.
+#' @return A one-row data frame with the same columns as
+#'   parse_mzml_filename()'s success case.
+build_unparsed_row <- function(filename, error_message) {
+  date_match <- regmatches(filename, regexpr("^\\d{4}-\\d{2}-\\d{2}", filename))
+  date <- if (length(date_match) > 0) as.Date(date_match) else as.Date(NA)
+
+  data.frame(
+    filename = filename,
+    date = date,
+    batch = NA_character_,
+    plate = NA_character_,
+    batch_plate = NA_character_,
+    column = NA_character_,
+    polarity = NA_character_,
+    sample_name = NA_character_,
+    sample_type = NA_character_,
+    is_qc = NA,
+    injection_order = NA_integer_,
+    needs_review = TRUE,
+    parse_error = error_message,
     stringsAsFactors = FALSE
   )
 }
 
 #' Recursively scan a directory for .mzML files and parse each filename.
 #'
-#' - Fails loudly, listing every offending file, rather than silently
-#'   mis-parsing a mis-named one.
+#' - A file whose name doesn't match the expected pattern doesn't abort the
+#'   whole scan -- it's kept in the result via `build_unparsed_row()`
+#'   (filename only, everything else blank, `needs_review = TRUE`) so one
+#'   bad filename doesn't block sheet generation for every other file.
+#'   `build_sample_sheet()` defaults `include` to FALSE for these.
 #' - injection_order prefers each file's mzML acquisition timestamp (true
 #'   run order) over the filename-encoded number; if even one file's
 #'   timestamp is unreadable, the whole batch falls back to the
@@ -162,18 +207,18 @@ scan_mzml_files <- function(raw_dir) {
   parsed <- lapply(filenames, function(f) {
     tryCatch(
       parse_mzml_filename(f),
-      error = function(e) NULL
+      error = function(e) build_unparsed_row(f, conditionMessage(e))
     )
   })
 
-  failed <- filenames[vapply(parsed, is.null, logical(1))]
-  if (length(failed) > 0) {
-    stop(
-      "The following files do not match the expected naming pattern ",
-      "(DATE_BATCH_COLUMN_POLARITY_SAMPLENAME_INJORDER.raw.mzML):\n  ",
-      paste(failed, collapse = "\n  "),
-      call. = FALSE
+  needs_review <- vapply(parsed, function(p) p$needs_review, logical(1))
+  if (any(needs_review)) {
+    msg_fmt <- paste0(
+      "%d file(s) didn't match the expected naming pattern -- kept in the sheet ",
+      "with blank metadata for manual review (needs_review/parse_error columns), ",
+      "include defaulted to FALSE:\n  %s"
     )
+    message(sprintf(msg_fmt, sum(needs_review), paste(filenames[needs_review], collapse = "\n  ")))
   }
 
   result <- do.call(rbind, parsed)

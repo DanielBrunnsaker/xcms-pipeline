@@ -48,6 +48,23 @@ test_that("disambiguate_sample_names uses a real plate over a synthetic one", {
   expect_equal(result$sample_label[1], "Plate9-sQC01")
 })
 
+test_that("build_sample_sheet defaults include to FALSE for needs_review rows, TRUE otherwise", {
+  parsed <- data.frame(
+    filepath = c("f1.mzML", "f2.mzML"), filename = c("f1.mzML", "f2.mzML"),
+    date = as.Date(c("2024-01-01", "2024-01-02")),
+    batch = c("B1", NA), plate = NA_character_, batch_plate = c("B1", NA),
+    column = c("RP", NA), polarity = c("POS", NA),
+    sample_name = c("s1", NA), sample_type = c("Sample", NA),
+    is_qc = c(FALSE, NA), injection_order = c(1L, NA),
+    injection_order_source = "filename", spectrum_mode = NA_character_,
+    needs_review = c(FALSE, TRUE), parse_error = c(NA_character_, "bad filename"),
+    stringsAsFactors = FALSE
+  )
+  sheet <- build_sample_sheet(parsed)
+  expect_equal(sheet$include[sheet$filename == "f1.mzML"], TRUE)
+  expect_equal(sheet$include[sheet$filename == "f2.mzML"], FALSE)
+})
+
 test_that("validate_sample_sheet errors on a missing required column", {
   sheet <- data.frame(filepath = character(0))
   expect_error(validate_sample_sheet(sheet), "missing required column")

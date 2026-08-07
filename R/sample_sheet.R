@@ -55,6 +55,12 @@ disambiguate_sample_names <- function(parsed) {
 #' Adds columns that can't be derived from the filename (left blank for the
 #' user to fill in during manual review) and sorts rows for easy checking.
 #'
+#' `include` defaults to FALSE (not the usual TRUE) for `needs_review` rows
+#' -- a file whose name couldn't be parsed at all has no reliable
+#' batch/column/polarity/sample_type, so it shouldn't silently enter QC
+#' checking or peak picking until someone's filled those in by hand and
+#' flipped `include` back on.
+#'
 #' @param parsed Data frame as returned by `scan_mzml_files()`.
 #' @return A data frame ready to be written to Excel.
 build_sample_sheet <- function(parsed) {
@@ -62,15 +68,16 @@ build_sample_sheet <- function(parsed) {
   parsed$instrument <- NA_character_
   parsed$sample_group <- NA_character_
   parsed$notes <- NA_character_
-  parsed$include <- TRUE
+  parsed$include <- !parsed$needs_review
 
   parsed <- parsed[order(parsed$column, parsed$polarity, parsed$batch_plate, parsed$injection_order), ]
 
   parsed[, c(
-    "filepath", "filename", "date", "batch", "plate", "batch_plate",
-    "column", "polarity", "sample_name", "sample_label", "sample_type",
-    "is_qc", "injection_order", "injection_order_source", "spectrum_mode",
-    "instrument", "sample_group", "notes", "include"
+    "filepath", "filename", "needs_review", "parse_error", "date", "batch",
+    "plate", "batch_plate", "column", "polarity", "sample_name",
+    "sample_label", "sample_type", "is_qc", "injection_order",
+    "injection_order_source", "spectrum_mode", "instrument", "sample_group",
+    "notes", "include"
   )]
 }
 

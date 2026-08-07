@@ -42,6 +42,12 @@ and `notes`. Batch/plate/QC-type/injection-order are parsed from filenames
 automatically. Set `include` to `FALSE` to exclude a row without deleting it
 (default `TRUE`).
 
+A file whose name doesn't match the expected pattern doesn't block the rest
+of the sheet — it's still added, with just its filename and `needs_review =
+TRUE`/`parse_error` explaining why, `include` defaulted to `FALSE`. Fill in
+its `batch`/`column`/`polarity`/`sample_name`/etc. by hand and flip `include`
+back to `TRUE` once it's ready.
+
 **2. Check QC quality**
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/check_qc_quality.R /data

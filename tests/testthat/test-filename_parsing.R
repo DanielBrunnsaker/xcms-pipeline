@@ -89,7 +89,7 @@ test_that("parse_mzml_filename discards extra text on both batch and sample name
   expect_equal(result$injection_order, 203L)
 })
 
-test_that("parse_mzml_filename errors on a non-matching filename", {
+test_that("parse_mzml_filename still errors on a non-matching filename (caller decides what to do)", {
   expect_error(
     parse_mzml_filename("not_a_valid_filename.mzML"),
     "does not match expected pattern"
@@ -98,4 +98,37 @@ test_that("parse_mzml_filename errors on a non-matching filename", {
     parse_mzml_filename("2024-04-27_B5W17_RP_XYZ_sQC01_036.mzML"),
     "does not match expected pattern"
   )
+})
+
+test_that("build_unparsed_row keeps the filename and salvages a leading date, blanks everything else", {
+  row <- build_unparsed_row("2024-08-26_B14W34_RP_NEG_sQC_EXTRA.mzML", "some parse error")
+
+  expect_equal(row$filename, "2024-08-26_B14W34_RP_NEG_sQC_EXTRA.mzML")
+  expect_equal(row$date, as.Date("2024-08-26"))
+  expect_true(row$needs_review)
+  expect_equal(row$parse_error, "some parse error")
+  expect_true(is.na(row$batch))
+  expect_true(is.na(row$column))
+  expect_true(is.na(row$polarity))
+  expect_true(is.na(row$sample_name))
+  expect_true(is.na(row$sample_type))
+  expect_true(is.na(row$is_qc))
+  expect_true(is.na(row$injection_order))
+})
+
+test_that("build_unparsed_row leaves date NA too if even that can't be found", {
+  row <- build_unparsed_row("totally_unparseable.mzML", "some parse error")
+  expect_true(is.na(row$date))
+})
+
+test_that("build_unparsed_row's columns match parse_mzml_filename's success-case columns", {
+  ok <- parse_mzml_filename("2024-04-27_B5W17_RP_POS_sQC01_036.mzML")
+  unparsed <- build_unparsed_row("bad.mzML", "err")
+  expect_equal(names(ok), names(unparsed))
+})
+
+test_that("a successfully parsed row has needs_review = FALSE and parse_error = NA", {
+  result <- parse_mzml_filename("2024-04-27_B5W17_RP_POS_sQC01_036.mzML")
+  expect_false(result$needs_review)
+  expect_true(is.na(result$parse_error))
 })
