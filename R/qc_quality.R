@@ -26,36 +26,27 @@ flag_low_outliers <- function(x, min_fraction_of_median = 0.5) {
   x < low_outlier_threshold(x, min_fraction_of_median)
 }
 
-#' Check QC injection quality within a group via TIC and aligned feature
-#' count (default/unoptimized centWave params — just needs to separate
-#' "clearly fine" from "clearly broken", not produce publication-quality
-#' peak picking). A file is flagged if either metric falls well below the
-#' rest of the group's — the signature of a missed injection, empty vial,
-#' or degraded run.
+#' Check QC injection quality via TIC and aligned feature count (default
+#' centWave params -- just needs to separate "clearly fine" from "clearly
+#' broken"). Flags a file if either metric falls well below its peers -- the
+#' signature of a missed injection, empty vial, or degraded run.
 #'
-#' - Runs `adjustRtime()` before correspondence: this check can span many
-#'   batches/months, and genuine RT drift could make a fine QC look like
-#'   it's missing features purely from misalignment.
-#' - Correspondence groups by `sample_type` (sQC vs ltQC are different
-#'   matrices, shouldn't be lumped together).
-#' - Deliberately skips `fillChromPeaks()` — gap-filling would paper over
-#'   the exact weak/missing signal this check exists to catch.
+#' - Runs `adjustRtime()` first: RT drift across batches/months could make a
+#'   fine QC look like it's missing features from misalignment alone.
+#' - Groups by `sample_type` (sQC/ltQC are different matrices).
+#' - Skips `fillChromPeaks()` -- gap-filling would paper over the weak
+#'   signal this check exists to catch.
 #'
 #' @param qc_sheet Sample sheet rows for all QC (sQC/ltQC) files in a group.
-#' @param min_fraction_of_median Threshold passed to `flag_low_outliers()`,
-#'   used for the feature-count check always, and for the TIC check only
-#'   when no instrument-specific absolute threshold is available (see
-#'   below).
-#' @param min_batch_qc Minimum QC files a batch needs before it gets its own
-#'   local threshold — below this, a batch relies on the global check alone
-#'   (a threshold from 1 point isn't meaningful).
+#' @param min_fraction_of_median Threshold for `flag_low_outliers()` --
+#'   always used for feature count, and for TIC when no instrument-specific
+#'   absolute threshold exists.
+#' @param min_batch_qc Minimum QC files for a batch to get its own local
+#'   threshold (below this, relies on the global check alone).
 #' @return A data.frame with one row per file: filepath, tic,
-#'   aligned_feature_count, flagged_global (outlier vs. the whole group),
-#'   flagged_batch (outlier vs. its own batch), flagged (either), reason.
-#'   The actual global threshold used for each metric is attached as
-#'   attributes `tic_threshold` and `feature_threshold` (so reporting can
-#'   draw the line that was actually used, not recompute a possibly-
-#'   different one).
+#'   aligned_feature_count, flagged_global, flagged_batch, flagged, reason.
+#'   `tic_threshold`/`feature_threshold` attributes carry the actual
+#'   thresholds used (so reporting doesn't need to recompute them).
 check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_qc = 2) {
   message(sprintf("Reading %d QC file(s) for quality check...", nrow(qc_sheet)))
   raw_data <- read_raw_data(qc_sheet$filepath, get_spectrum_modes(qc_sheet))
@@ -168,19 +159,14 @@ to_rgba <- function(color, alpha) {
 }
 
 #' Interactive plotly bar chart of one QC quality metric.
-#' - Colored by batch identity (fixed hue order, a qualitative HCL palette).
-#'   A single real bar trace carries the precomputed per-bar colors — using
-#'   one trace per batch (each covering only part of the x-axis) is a known
-#'   plotly footgun that can mis-align/stack bars unpredictably. A small
-#'   invisible ("legend only") trace per batch supplies the clickable
-#'   legend instead, without affecting the actual bars.
-#' - Flagged files are rendered at reduced alpha instead of a separate
-#'   color — passed = opaque, flagged = faded.
-#' - Hover shows the exact sample, batch, value, status, and (if flagged)
-#'   why — including whether it tripped the global or per-batch check.
-#' - Threshold drawn as a labeled horizontal line (the global one; a
-#'   per-batch check also contributes to flagging but isn't separately
-#'   drawn here — see `reason` in hover text for which scope(s) fired).
+#' - Colored by batch (fixed HCL hue order). One real trace with precomputed
+#'   per-bar colors -- one trace per batch is a known plotly footgun that
+#'   mis-aligns/stacks bars. Invisible per-batch "legend only" traces supply
+#'   the clickable legend instead.
+#' - Flagged = faded (reduced alpha), passed = opaque.
+#' - Hover shows sample/batch/value/status/reason.
+#' - Threshold drawn as a labeled line (global only; per-batch scope shown
+#'   in hover `reason` instead).
 #'
 #' @param values Numeric vector to plot (e.g. tic or aligned_feature_count).
 #' @param flagged Logical vector, same length/order as `values`.

@@ -17,18 +17,14 @@ backup_file <- function(path) {
   invisible(backup_path)
 }
 
-#' Disambiguate sample names that repeat within the same batch (e.g. two
-#' "sQC01" injections that are genuinely different files, just not recorded
-#' with a plate in the filename).
-#' - Infers a synthetic plate number from acquisition order: in
-#'   chronological order (by `injection_order`) within the batch, the first
-#'   occurrence becomes "Plate1-sQC01", the second "Plate2-sQC01", etc.
-#' - Uses the real `plate` instead, if one was already parsed for that row.
-#' - Rows with a unique sample_name in their batch are left as-is.
-#'
-#' A heuristic guess, not parsed ground truth — kept in a separate
-#' `sample_label` column (not overwriting `sample_name`/`plate`) so a wrong
-#' chronological-order guess is easy to spot and correct during review.
+#' Disambiguate sample names repeated within a batch (e.g. two "sQC01"
+#' injections not recorded with a plate in the filename).
+#' - Infers a synthetic plate from acquisition order: 1st occurrence ->
+#'   "Plate1-sQC01", 2nd -> "Plate2-sQC01", etc. Uses the real `plate`
+#'   instead if already parsed. Unique names are left as-is.
+#' - A heuristic, not ground truth -- kept in a separate `sample_label`
+#'   column (not overwriting `sample_name`/`plate`) so a wrong guess is easy
+#'   to spot and fix during review.
 #'
 #' @param parsed Data frame as returned by `scan_mzml_files()`.
 #' @return The same data frame with a new `sample_label` column.

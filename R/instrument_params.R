@@ -10,8 +10,8 @@
 #   prefilter (c(k, int)), mzdiff, noise — fixed (not optimized) settings.
 # - bounds: min_peakwidth, max_peakwidth, mzdiff, ppm — each
 #   c(lower, upper), the IPO2 search-space range for that parameter.
-# - int_threshold: absolute intensity floor for the instrument (not used
-#   by this pipeline yet — kept for the later filtering stage).
+# - int_threshold: absolute intensity floor for the instrument, used as
+#   check_qc_quality()'s TIC threshold when available (R/qc_quality.R).
 
 INSTRUMENT_PARAMS <- list(
   MRT = list(

@@ -17,6 +17,9 @@
 #     Rscript scripts/check_qc_quality.R /data
 #   docker run --rm -v /path/to/mzml/folder:/data xcms-pipeline \
 #     Rscript scripts/run_peak_picking.R /data
+#
+# Run the test suite (no data folder needed):
+#   docker run --rm xcms-pipeline Rscript tests/testthat.R
 
 FROM bioconductor/bioconductor_docker:devel
 
@@ -48,3 +51,4 @@ RUN Rscript docker/install_packages.R
 
 COPY R/ ./R/
 COPY scripts/ ./scripts/
+COPY tests/ ./tests/

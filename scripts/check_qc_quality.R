@@ -1,35 +1,28 @@
 # Standalone QC quality check: flags likely-faulty QC injections (missed
-# injections, empty vials, degraded runs) via a quick default-parameters
-# peak-picking pass, using TIC and aligned feature count vs. their group's
-# peers. Run after reviewing the sample sheet, before run_peak_picking.R —
-# so a bad QC never gets picked as the "representative" QC for IPO2.
+# injections, empty vials, degraded runs) via TIC and aligned feature count
+# vs. group peers. Run after reviewing the sample sheet, before
+# run_peak_picking.R, so a bad QC never becomes IPO's "representative" QC.
 #
 # Usage:
 #   Rscript scripts/check_qc_quality.R <folder> [include_ltqc]
 #
-# Reads <folder>/metadata/sample_sheet.xlsx, checks sQC + ltQC pooled
-# together per column x polarity group, unless [include_ltqc] is "false"
-# (default "true").
-# - Pooling: median/MAD have a 50% breakdown point — if one QC type alone
-#   is majority-faulty, pooling with the other gives the threshold a
-#   better shot at a majority-good population. groupChromPeaks() still
-#   distinguishes sQC/ltQC internally, so only the outlier-flagging
-#   population is pooled, not correspondence itself.
-# - Set include_ltqc "false" if ltQC shouldn't be trusted at all for this
-#   project — sQC is then checked alone.
-# - If neither QC type has enough good files, nothing can rescue that.
+# Checks sQC + ltQC pooled per column x polarity group, unless
+# [include_ltqc] is "false" (default "true").
+# - Pooling: median/MAD have a 50% breakdown point -- pooling with the
+#   other QC type gives the threshold a better shot at a majority-good
+#   population if one type alone is majority-faulty. groupChromPeaks()
+#   still distinguishes sQC/ltQC internally; only outlier-flagging pools.
+# - include_ltqc "false": check sQC alone if ltQC isn't trusted.
+# - Neither type having enough good files can't be rescued.
 #
 # TIC prefers an absolute, instrument-specific floor (`int_threshold` in
 # R/instrument_params.R) over a batch-distribution threshold, when
-# available — see check_qc_quality() for why.
+# available -- see check_qc_quality() for why.
 #
-# Writes `qc_flagged_global` (outlier vs. the whole group), `qc_flagged_batch`
-# (outlier vs. its own batch), `qc_flagged` (either — this is what
-# select_ipo_subset() excludes on), and `qc_flag_reason` back into the
-# sheet. Also writes an interactive HTML report
-# (<folder>/metadata/qc_quality_report.html): TIC and aligned-feature-count
-# charts per group, colored by batch (hover for exact sample/value/reason),
-# faded = flagged.
+# Writes `qc_flagged_global`/`qc_flagged_batch`/`qc_flagged` (either --
+# what select_ipo_subset() excludes on) and `qc_flag_reason` back into the
+# sheet, plus an interactive HTML report
+# (<folder>/metadata/qc_quality_report.html).
 
 source("R/sample_sheet.R")
 source("R/spectrum_mode.R")

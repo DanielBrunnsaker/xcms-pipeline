@@ -1,139 +1,39 @@
-# IPO2-based optimization of xcms centWave parameters, and peak picking using
-# the optimized parameters, run independently per column x polarity group.
+# IPO2-optimized centWave peak picking, per column x polarity group.
 #
-# Uses IPO2 from gitlab.com/CarlBrunius/IPO2 — the package the reference
-# pipeline (github.com/MetaboComp/xcms_pipeline) itself depends on for its
-# optimXCMS() calls — not github.com/wmoldham/IPO2 (a same-named but
-# unrelated reimplementation we used earlier). The two differ fundamentally:
-# - wmoldham/IPO2 repeats a ~25-point central-composite design (response
-#   surface methodology) per iteration, for up to 50 iterations.
-# - CarlBrunius/IPO2 wraps nloptr::nloptr() (Nelder-Mead simplex by
-#   default), evaluating one candidate parameter set at a time based on the
-#   previous result — far fewer evaluations to converge, and it reuses
-#   IPO's original (pre-XCMS3) isotope-pair scoring, which degrades to a
-#   score of 0 for a degenerate/empty peak table rather than erroring.
-# Install with: renv::install("gitlab::CarlBrunius/IPO2") (also needs
-# nloptr, which this package's DESCRIPTION doesn't declare despite needing
-# it internally).
-#
-# Because evaluations are one-at-a-time (not a parallel batch), there's no
-# cross-evaluation parallelism to register here. The only parallelism
-# available is *within* one evaluation, across the subset's files, inside
-# its optimPP()'s plain findChromPeaks() call (no BPPARAM passed, so it
-# uses whatever's registered as session default) — the same shape as our
-# own with_bp_workers() calls elsewhere, which already run fine under
-# SnowParam. So register that here too, instead of forcing SerialParam.
-BiocParallel::register(bp_workers())
+# The IPO2/Bioconductor session setup (library(xcms), the optimPP()
+# monkeypatch) lives at the BOTTOM of this file, not the top -- it has no
+# effect on any function defined above it, and keeping it out of the way
+# means this file's pure logic (select_ipo_subset() etc.) can be sourced
+# and unit-tested without Bioconductor installed. See tests/testthat/.
 
-# IPO2's internals (getCentWaveParams(), optimPP()) call CentWaveParam(),
-# findChromPeaks(), and readMSData() unqualified, expecting xcms/MSnbase to
-# be attached to the search path -- true for a normal library(IPO2) session
-# (Depends: xcms gets attached automatically), but NOT true here: we only
-# ever call IPO2::optimXCMS() via `::`, which loads xcms as a namespace
-# only, without attaching it (Depends only auto-attaches on a real
-# library()/require() of the depending package, not on `::` access).
-# MSnbase already gets attached this way via R/spectrum_mode.R for the same
-# reason; xcms needs the same treatment here.
-library(xcms)
-
-# IPO2's optimPP() reads its subset files itself (readMSData() +
-# findChromPeaks()) with no centroiding step in between -- fine for
-# centroid-mode data, but the search runs against uncentroided data
-# otherwise. A temp-mzML round trip was tried first (centroid via
-# read_raw_data(), write out, point optimXCMS() at the temp files) but the
-# written files came back with zero MS1 spectra on reread -- a real bug
-# somewhere in MSnbase's write/read cycle for this object shape, not
-# something to chase blind without a live environment. Patched here
-# instead: reuses the exact pickPeaks()-on-OnDiskMSnExp lazy-centroiding
-# this pipeline already relies on successfully elsewhere (read_raw_data()),
-# applied conditionally via a session option run_ipo_optimization() sets
-# before each optimXCMS() call -- no disk round trip, no new mechanism.
-patched_optimPP <- function(x0, files, optimVars, customParam, verbose = TRUE) {
-  if (verbose) cat("\nParameter values:", x0, "\n")
-
-  cwParam <- getCentWaveParams(par = x0, optimVars = optimVars, customParam = customParam)
-
-  raw_data <- readMSData(files = files, mode = "onDisk")
-  if (isTRUE(getOption("xcms_pipeline.centroid_ipo_input", FALSE))) {
-    raw_data <- pickPeaks(raw_data)
-  }
-  xchr <- findChromPeaks(raw_data, param = cwParam)
-
-  xset <- as(xchr, "xcmsSet")
-  score <- suppressMessages(IPO2:::calcPPS(xset, "IPO")[5])
-
-  if (verbose) cat("\nIPO score:", score, "\n")
-
-  # Checkpoint the best result seen so far to disk, so an interrupted run
-  # (killed container, crash, power loss) never loses all progress -- a
-  # fresh run picks this up as its starting point instead of the generic
-  # default (see run_ipo_optimization()). Not a true resume (nloptr doesn't
-  # expose the simplex's internal state to save/restore), but it never
-  # starts the ~100-evaluation search over from scratch either.
-  checkpoint_path <- getOption("xcms_pipeline.ipo_checkpoint_path")
-  if (!is.null(checkpoint_path) && is.finite(score)) {
-    best_so_far <- if (file.exists(checkpoint_path)) readRDS(checkpoint_path)$score else -Inf
-    if (score > best_so_far) {
-      saveRDS(list(cwParam = cwParam, score = score), checkpoint_path)
-    }
-  }
-
-  -score
-}
-environment(patched_optimPP) <- asNamespace("IPO2")
-assignInNamespace("optimPP", patched_optimPP, ns = "IPO2")
-
-#' Pick a small representative subset of files to run parameter optimization
-#' on.
+#' Pick a small representative subset of files for parameter optimization.
 #'
-#' Runs on a handful of files, not the full batch (the DoE search evaluates
-#' many parameter combinations). Preference order:
-#' 1. sQC — pooled from the study's own samples, same matrix injected
-#'    repeatedly: a stable, reproducible signal to tune against.
-#' 2. ltQC — external long-term reference matrix; still QC-like
-#'    reproducibility, but not this study's chemistry. Used only if sQC is
-#'    insufficient.
-#' 3. Regular study samples — heterogeneous by design, works against the
-#'    optimizer's reproducibility-based scoring. Last resort.
+#' Preference order: sQC (stable, repeated matrix) > ltQC (repeated but not
+#' this study's chemistry) > regular samples (heterogeneous, last resort).
+#' Flagged QC rows (`qc_flagged == TRUE`) are excluded.
 #'
 #' Batch handling:
-#' - More batches than `n` (e.g. "global" scope with many batches): the
-#'   batches themselves are subsampled evenly across the timespan, one
-#'   file from each selected batch.
-#' - Fewer (or equal) batches than `n`: `n` is distributed as evenly as
-#'   possible across all batches (at least 1 each, more if `n` allows),
-#'   each batch's own picks spread across its own injection timing — so a
-#'   low batch count never silently hands the optimizer fewer files than
-#'   requested (a handful of batches with only 1 file apiece gives IPO2
-#'   very little to work with for its reproducibility-based scoring).
-#' - Single batch (e.g. "batch" scope): picks spread evenly across
-#'   `injection_order` within that batch, as before.
+#' - More batches than `n`: subsample batches evenly across time, one file
+#'   each.
+#' - Fewer/equal batches than `n`: spread `n` evenly across batches (each
+#'   batch's share spread across its own timeline), so a low batch count
+#'   never hands the optimizer fewer files than requested.
+#' - Single batch: spread evenly across `injection_order`.
 #'
-#' Within whichever tier gets used, the selection is kept to a single
-#' spectrum mode (centroid preferred, since IPO2::optimXCMS() reads files
-#' itself with no centroiding step -- run_ipo_optimization() centroids the
-#' whole subset only if it's uniformly profile-mode) -- but only when one
-#' mode alone has enough candidates to fill the request; mixed modes are
-#' used as a last resort rather than handing the optimizer fewer files than
-#' asked for.
-#'
-#' QC rows flagged by `scripts/check_qc_quality.R` (`qc_flagged == TRUE`)
-#' are excluded — a missed injection/empty vial should never be the
-#' "representative" QC. If that check was never run, every QC row counts.
+#' Keeps the selection to a single spectrum mode (centroid preferred --
+#' optimXCMS() has no centroiding step, so a mixed-mode subset would need
+#' all-or-nothing centroiding that distorts the already-centroid files) --
+#' but only when one mode alone can fill the request; mixed as a last
+#' resort rather than under-filling.
 #'
 #' @param group_sheet Sample sheet rows for a single column x polarity group.
 #' @param n Number of files to select (or, when multiple batches are
 #'   present, the max number of batches to draw one file from each).
-#' @param min_qc Minimum number of QC rows required before they're considered
-#'   "enough" to use (below this, fall through to the next tier).
+#' @param min_qc Minimum QC rows for a tier to count as "enough" (below
+#'   this, fall through to the next tier).
 select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
-  # run_ipo_optimization() centroids the whole subset (all-or-nothing) if
-  # any file in it is profile-mode -- correct only if the subset is
-  # actually uniform, since applying pickPeaks() to an already-centroided
-  # file can distort it. So keep whichever tier gets used to a single
-  # spectrum mode: prefer whichever mode (centroid or profile) has enough
-  # candidates to fill the request on its own; only actually mix modes if
-  # neither alone does.
+  # Prefer whichever spectrum mode has enough candidates to fill the
+  # request on its own; mix only if neither alone does. See docstring above.
   prefer_uniform_mode <- function(rows, n) {
     is_profile <- get_spectrum_modes(rows) %in% "profile"
     if (sum(!is_profile) >= n) {
@@ -203,11 +103,7 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
   }
 
   regular_rows <- group_sheet[group_sheet$sample_type == "Sample", , drop = FALSE]
-  regular_rows <- prefer_uniform_mode(regular_rows, n)
-  n_regular <- min(n, nrow(regular_rows))
-  subset_files <- regular_rows$filepath[sample(nrow(regular_rows), n_regular)]
-
-  if (length(subset_files) == 0) {
+  if (nrow(regular_rows) == 0) {
     batches <- unique(group_sheet$batch)
     batch_desc <- if (length(batches) == 1) sprintf("batch: %s, ", batches) else ""
     stop(sprintf(
@@ -220,7 +116,7 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
     ), call. = FALSE)
   }
 
-  subset_files
+  pick_representative(prefer_uniform_mode(regular_rows, n), n)
 }
 
 #' Run IPO2 optimization for one column x polarity group, caching the result
@@ -233,7 +129,7 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #'
 #' Sets the `xcms_pipeline.centroid_ipo_input` option before calling
 #' `optimXCMS()` if any subset file is profile-mode -- read by
-#' `patched_optimPP()` (top of this file) to centroid in-place, since
+#' `patched_optimPP()` (bottom of this file) to centroid in-place, since
 #' `optimXCMS()` otherwise reads its files with no centroiding step at all.
 #'
 #' @param group_sheet Sample sheet rows for this group.
@@ -285,7 +181,7 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4, fres
         call. = FALSE
       )
     } else {
-      message("IPO subset is profile-mode; centroiding it for the search (see patched_optimPP() at the top of this file).")
+      message("IPO subset is profile-mode; centroiding it for the search (see patched_optimPP() at the bottom of this file).")
     }
   }
   old_opts <- options(
@@ -383,30 +279,20 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
 }
 
 #' Turns individually-picked peaks into one aligned feature table: aligns
-#' retention times, groups peaks into cross-sample features, fills gaps.
-#' Same steps as github.com/MetaboComp/xcms_pipeline (pure_xcms_pipeline.R):
-#' adjustRtime(ObiwarpParam) -> groupChromPeaks(PeakDensityParam) ->
-#' fillChromPeaks(ChromPeakAreaParam). ChromPeakAreaParam uses xcms's
-#' built-in defaults (untuned, for now).
+#' retention times, groups into cross-sample features, fills gaps. Same
+#' steps as the reference pipeline (adjustRtime -> groupChromPeaks ->
+#' fillChromPeaks); ChromPeakAreaParam stays at xcms defaults (untuned).
 #'
-#' `sampleGroups` uses our `sample_type` column (sQC/ltQC/Blank/Sample) —
-#' mirrors the reference pipeline's actual usage: despite the name, their
-#' "sample_group" is QC/sample TYPE classification, not biological
-#' condition, and is a better fit than the sheet's manually-curated
-#' (possibly unfilled) `sample_group`.
-#'
-#' `minFraction = 0.2` deliberately (xcms's default is 0.5; matches the
-#' reference pipeline's own final `minFrac`), always, regardless of
-#' `retgroup_params`: with real study samples pooled into one big "Sample"
-#' group regardless of actual biological condition, a 50% presence
-#' requirement silently drops any feature specific to a subset of
-#' conditions. This pipeline stops at the aligned feature table on purpose
-#' (blank filtering, frequency filtering, etc. are a later stage), so the
-#' bar here is kept low rather than losing signal now that can't be
-#' recovered later. `run_retgroup_optimization()`'s own fixed `minfrac`
-#' (0.8, also matching the reference) is a separate, internal-only value
-#' used just for scoring during that search -- deliberately NOT used here,
-#' see that file's header comment.
+#' - `sampleGroups` uses `sample_type` (sQC/ltQC/Blank/Sample), not the
+#'   sheet's `sample_group` -- matches the reference's actual usage and
+#'   doesn't depend on that column being filled in.
+#' - `minFraction = 0.2` always (xcms default 0.5; matches the reference's
+#'   own final `minFrac`), regardless of `retgroup_params`: pooling all
+#'   real samples into one "Sample" group means a 50% bar would silently
+#'   drop condition-specific features, and filtering is a deliberate later
+#'   stage, not implicit here. `run_retgroup_optimization()`'s fixed
+#'   `minfrac` (0.8) is a separate, internal-only scoring value -- not used
+#'   for this.
 #'
 #' @param xdata XCMSnExp with peaks already picked (via `pick_peaks()`, or
 #'   several combined with `c()`).
@@ -467,16 +353,40 @@ build_feature_table <- function(xdata, sample_names) {
 #' XCMSnExp object, the flat per-peak table (including gap-filled entries),
 #' and the aligned feature table.
 #'
+#' `peak_table.csv` is enriched beyond xcms::chromPeaks()'s raw columns:
+#' - `sample_name`: chromPeaks()'s numeric `sample` index, translated.
+#' - `is_filled`/`ms_level`: from the separate, parallel-indexed
+#'   chromPeakData() -- `is_filled` matters for external match confidence
+#'   (a gap-filled value is weaker evidence than a real detection).
+#' - `feature`: aligned feature ID (FT0001, ...) this peak belongs to, if
+#'   any -- lets you drill from a feature down to its raw per-sample peaks
+#'   without reloading xdata.rds.
+#'
 #' @param xdata Aligned XCMSnExp (after `align_and_correspond()`).
 #' @param feature_table Data.frame from `build_feature_table()`.
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
-save_peak_picking_outputs <- function(xdata, feature_table, out_dir) {
+#' @param sample_names Character vector of sample names, one per file, in
+#'   the same order as files in `xdata` -- same vector passed to
+#'   `build_feature_table()`.
+save_peak_picking_outputs <- function(xdata, feature_table, out_dir, sample_names) {
   peaks_dir <- file.path(out_dir, "peaks")
   dir.create(peaks_dir, recursive = TRUE, showWarnings = FALSE)
 
   saveRDS(xdata, file.path(peaks_dir, "xdata.rds"))
 
   peak_table <- as.data.frame(xcms::chromPeaks(xdata))
+  peak_table$sample_name <- sample_names[peak_table$sample]
+
+  peak_data <- as.data.frame(xcms::chromPeakData(xdata))
+  peak_table$is_filled <- peak_data$is_filled
+  peak_table$ms_level <- peak_data$ms_level
+
+  feature_defs_raw <- xcms::featureDefinitions(xdata)
+  peak_table$feature <- NA_character_
+  for (i in seq_len(nrow(feature_defs_raw))) {
+    peak_table$feature[feature_defs_raw$peakidx[[i]]] <- rownames(feature_defs_raw)[i]
+  }
+
   write.csv(peak_table, file.path(peaks_dir, "peak_table.csv"), row.names = FALSE)
 
   write.csv(feature_table, file.path(out_dir, "feature_table.csv"), row.names = FALSE)
@@ -486,3 +396,69 @@ save_peak_picking_outputs <- function(xdata, feature_table, out_dir) {
     nrow(peak_table), nrow(feature_table), out_dir
   ))
 }
+
+# --- IPO2/Bioconductor session setup (deliberately last -- see file header) ---
+#
+# Uses gitlab.com/CarlBrunius/IPO2 (what the reference pipeline itself
+# depends on), NOT github.com/wmoldham/IPO2 (same name, unrelated package).
+# - wmoldham/IPO2: central-composite design, ~25 evaluations/iteration.
+# - CarlBrunius/IPO2: nloptr Nelder-Mead, one evaluation at a time -- fewer
+#   evaluations, reuses IPO's original isotope-pair scoring (0 for a
+#   degenerate peak table rather than erroring).
+# Install: renv::install("gitlab::CarlBrunius/IPO2") + nloptr (DESCRIPTION
+# doesn't declare it despite needing it).
+#
+# No cross-evaluation parallelism to register (evaluations are sequential).
+# The only parallelism is within one evaluation, across the subset's files,
+# inside optimPP()'s findChromPeaks() call (no BPPARAM -> session default)
+# -- same shape as with_bp_workers() elsewhere, which runs fine under
+# SnowParam, so register that instead of forcing SerialParam.
+BiocParallel::register(bp_workers())
+
+# IPO2's internals call CentWaveParam()/findChromPeaks()/readMSData()
+# unqualified, expecting xcms/MSnbase attached to the search path. True for
+# library(IPO2); NOT true for IPO2::optimXCMS() via `::` (loads the
+# namespace only). MSnbase is attached in R/spectrum_mode.R for the same
+# reason; xcms needs it here too.
+library(xcms)
+
+# optimPP() reads its files itself with no centroiding step -- fine for
+# centroid data, wrong otherwise. Tried writing a centroided temp mzML and
+# pointing optimXCMS() at that instead, but the written files came back
+# with zero MS1 spectra on reread (a real MSnbase write/read bug, not
+# chased further without a live environment to debug it in). Patched here
+# instead: reuse the same pickPeaks()-on-OnDiskMSnExp lazy-centroiding
+# read_raw_data() already does elsewhere, applied conditionally via a
+# session option run_ipo_optimization() sets before each optimXCMS() call.
+patched_optimPP <- function(x0, files, optimVars, customParam, verbose = TRUE) {
+  if (verbose) cat("\nParameter values:", x0, "\n")
+
+  cwParam <- getCentWaveParams(par = x0, optimVars = optimVars, customParam = customParam)
+
+  raw_data <- readMSData(files = files, mode = "onDisk")
+  if (isTRUE(getOption("xcms_pipeline.centroid_ipo_input", FALSE))) {
+    raw_data <- pickPeaks(raw_data)
+  }
+  xchr <- findChromPeaks(raw_data, param = cwParam)
+
+  xset <- as(xchr, "xcmsSet")
+  score <- suppressMessages(IPO2:::calcPPS(xset, "IPO")[5])
+
+  if (verbose) cat("\nIPO score:", score, "\n")
+
+  # Checkpoint best-so-far to disk so an interrupted run resumes from here
+  # instead of the generic default (see run_ipo_optimization()). Not a true
+  # resume -- nloptr doesn't expose the simplex state -- but avoids
+  # restarting the whole search from scratch.
+  checkpoint_path <- getOption("xcms_pipeline.ipo_checkpoint_path")
+  if (!is.null(checkpoint_path) && is.finite(score)) {
+    best_so_far <- if (file.exists(checkpoint_path)) readRDS(checkpoint_path)$score else -Inf
+    if (score > best_so_far) {
+      saveRDS(list(cwParam = cwParam, score = score), checkpoint_path)
+    }
+  }
+
+  -score
+}
+environment(patched_optimPP) <- asNamespace("IPO2")
+assignInNamespace("optimPP", patched_optimPP, ns = "IPO2")

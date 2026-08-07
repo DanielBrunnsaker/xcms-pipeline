@@ -1,14 +1,3 @@
-# Detects whether an mzML file is profile or centroid mode, and centroids
-# profile data before peak picking — xcms's centWave works much better on
-# centroided data.
-#
-# MSnbase::pickPeaks() on an OnDiskMSnExp doesn't run immediately — it
-# registers a lazy ProcessingStep (function stored as the name "pickPeaks")
-# to apply later when spectra are read. That name only resolves if MSnbase
-# is attached, not just namespace-referenced — so, unlike the rest of this
-# codebase, MSnbase needs to be library()'d for centroiding to work.
-library(MSnbase)
-
 #' Detect whether an mzML file is profile or centroid mode.
 #'
 #' mzML declares this per-spectrum via a "profile spectrum"/"centroid
@@ -81,3 +70,11 @@ read_raw_data <- function(filepaths, spectrum_modes) {
 
   raw_data
 }
+
+# MSnbase::pickPeaks() on an OnDiskMSnExp doesn't run immediately -- it
+# registers a lazy ProcessingStep (function stored as the name "pickPeaks")
+# to apply later when spectra are read. That name only resolves if MSnbase
+# is attached, not just namespace-referenced. Deliberately last in this
+# file (not first): has no effect on the functions defined above, and
+# keeps them sourceable/testable without MSnbase installed.
+library(MSnbase)

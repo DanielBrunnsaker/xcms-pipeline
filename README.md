@@ -33,6 +33,10 @@ Point every command at a folder of `.mzML` files via a bind mount. Replace the p
 below with wherever your data actually lives (Windows: `C:\path\to\data`, macOS/Linux:
 `/path/to/data`).
 
+Runs (especially peak picking) can take a long time and aren't always watched live —
+append `2>&1 | tee /path/to/data/logs/$(date +%Y%m%d_%H%M%S).log` to any command below
+to keep a full record on disk as well as on screen (create the `logs` folder first).
+
 **1. Generate the sample sheet**
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/generate_sample_sheet.R /data
@@ -90,31 +94,52 @@ into the image):
 
 ```
 metadata/
-  sample_sheet.xlsx          reviewed sample metadata
+  sample_sheet.xlsx           reviewed sample metadata
   qc_quality_report.html      interactive QC charts
 output/<column>_<polarity>/
-  ipo_params.rds              optimized centWave parameters (global scope only
-                              -- under <batch>/ipo_params.rds per batch instead
-                              in batch scope)
-  ipo_checkpoint.rds          mid-search checkpoint (deleted on success;
-                              only present if interrupted partway through)
-  ipo_history.rds/.csv        IPO2 optimization result summary (final
-                              solution, score, nloptr status/iterations —
-                              not a full per-iteration trace)
-  batch_centwave_params.csv   batch scope only -- every batch's actual
-                              centWave params side by side, one row each
-  retgroup_params.rds          optimized obiwarp + correspondence bandwidth/
-                              bin-size (legacy IPO::optimizeRetGroup())
-  retgroup_history.rds        full optimizeRetGroup() result object
-  peaks/xdata.rds              full aligned XCMSnExp object
-  peaks/peak_table.csv        flat per-peak table (includes gap-filled peaks)
-  feature_table.csv           aligned feature table: one row per feature, one column per sample
+  ipo_params.rds               optimized centWave parameters (global scope
+                                only -- under <batch>/ipo_params.rds per
+                                batch instead in batch scope)
+  ipo_checkpoint.rds            mid-search checkpoint (deleted on success;
+                                only present if interrupted partway through)
+  ipo_history.rds/.csv          IPO2 optimization result summary (final
+                                solution, score, nloptr status/iterations --
+                                not a full per-iteration trace)
+  batch_centwave_params.csv     batch scope only -- every batch's actual
+                                centWave params side by side, one row each
+  retgroup_params.rds           optimized obiwarp + correspondence
+                                bandwidth/bin-size (legacy
+                                IPO::optimizeRetGroup())
+  retgroup_history.rds          full optimizeRetGroup() result object
+  peaks/xdata.rds               full aligned XCMSnExp object
+  peaks/peak_table.csv          flat per-peak table (includes gap-filled
+                                peaks), enriched with sample_name, is_filled,
+                                ms_level, and feature (which aligned feature
+                                this raw peak belongs to, if any)
+  feature_table.csv             aligned feature table: one row per feature,
+                                one column per sample
 ```
 
-`retgroup_params.rds` is cached the same way as `ipo_params.rds` — delete it to
-force that group's retention-time/correspondence search to redo. It doesn't
-currently participate in `[ipo_fresh]`/checkpointing, since it's a first
-integration of `IPO::optimizeRetGroup()` untested outside this project so far.
+`retgroup_params.rds` is cached and participates in `[ipo_fresh]` the same way
+as `ipo_params.rds` — delete it, or pass `true` for `[ipo_fresh]`, to force that
+group's retention-time/correspondence search to redo. It doesn't checkpoint
+mid-search yet, unlike the centWave search — `IPO::optimizeRetGroup()` is a
+first integration, untested outside this project so far.
+
+## Tests
+
+Unit tests cover the pure/deterministic logic (filename parsing, sample sheet
+handling, instrument param lookup, IPO subset selection) — not the parts that
+need real mzML files or a live Bioconductor run. No Docker required, just
+`testthat`:
+```
+install.packages("testthat")   # one-time
+Rscript tests/testthat.R
+```
+Also runs inside the image if you'd rather not install anything locally:
+```
+docker run --rm xcms-pipeline Rscript tests/testthat.R
+```
 
 ## Notes
 

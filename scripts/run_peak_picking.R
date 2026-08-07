@@ -1,9 +1,11 @@
 # The pipeline: IPO-optimized peak picking, retention-time alignment,
-# correspondence, and gap filling, producing one aligned feature table per
-# column x polarity group (e.g. RP_POS, RP_NEG, HILIC_POS never mixed).
-# Modeled after github.com/MetaboComp/xcms_pipeline (pure_xcms_pipeline.R),
-# stopping at the aligned feature table — no blank filtering, batch
-# correction, or clustering (that's a separate later stage).
+# correspondence, and gap filling -> one aligned feature table per column x
+# polarity group (RP_POS, RP_NEG, HILIC_POS never mixed). Modeled after
+# github.com/MetaboComp/xcms_pipeline, stopping at the aligned feature
+# table (blank filtering/batch correction/clustering are a later stage).
+# Retention-time/correspondence params are also optimized once per group
+# (legacy IPO::optimizeRetGroup(), see R/retgroup_optimization.R), cached
+# like the centWave search.
 #
 # Usage:
 #   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size] [ipo_fresh]
@@ -13,33 +15,21 @@
 # requirements).
 #
 # [ipo_scope] (default "global"):
-# - global: one IPO optimization per column x polarity group, across all
-#   its files regardless of batch.
-# - batch: a separate optimization per batch (captures batch-to-batch
-#   drift, at the cost of running IPO's search once per batch). Each
-#   batch's params are still saved separately
-#   (<folder>/output/<column>_<polarity>/<batch>/), and also collected
-#   side by side in <folder>/output/<column>_<polarity>/
-#   batch_centwave_params.csv for a quick per-batch comparison. Peak-picked
-#   results are combined via c() before alignment — always exactly
-#   one aligned feature table per group, regardless of scope.
+# - global: one IPO optimization per group, across all its files.
+# - batch: separate optimization per batch (captures batch-to-batch drift,
+#   costs one search per batch). Params saved per batch
+#   (<folder>/output/<column>_<polarity>/<batch>/) and collected side by
+#   side in .../batch_centwave_params.csv. Peak-picked results combine via
+#   c() before alignment -- always one feature table per group either way.
 #
-# [ipo_subset_size] (default 4): how many files IPO2 optimizes against
-# (select_ipo_subset() in R/peak_picking.R). In "global" scope spanning
-# multiple batches, this becomes the max number of batches to draw one
-# representative file from each. Raising it improves batch coverage but
-# multiplies IPO2's per-trial cost.
+# [ipo_subset_size] (default 4): files IPO2 optimizes against
+# (select_ipo_subset()). In "global" scope with multiple batches, this is
+# the max batches to draw one representative file from each. Larger =
+# better batch coverage, higher per-trial cost.
 #
-# [ipo_fresh] (default "false"): if "true", ignore any cached IPO2 result
-# and any mid-search checkpoint left by an interrupted prior run for every
-# group/batch, and re-optimize from scratch. Without this, an interrupted
-# run resumes each unfinished group/batch's search from its checkpoint
-# (see patched_optimPP()/run_ipo_optimization() in R/peak_picking.R) rather
-# than starting over.
-#
-# Retention-time alignment and correspondence parameters are themselves
-# optimized once per group (legacy IPO::optimizeRetGroup(), see
-# R/retgroup_optimization.R), cached the same way as the centWave search.
+# [ipo_fresh] (default "false"): "true" ignores any cached result/
+# checkpoint for every group/batch and re-optimizes from scratch. Default
+# resumes an interrupted run from its checkpoint instead of restarting.
 #
 # Output per group, under <folder>/output/<column>_<polarity>/:
 #   - peaks/xdata.rds        full aligned XCMSnExp object
@@ -127,23 +117,19 @@ for (group_name in names(groups)) {
       )
     }
 
-    # Consolidated, human-readable view of which centWave params were
-    # actually used per batch -- each batch's own ipo_params.rds/
-    # ipo_history.csv already has this individually, nested under its own
-    # subfolder; this collects them side by side in one file (same idea as
-    # the reference pipeline's own opt_params.csv).
+    # Side-by-side view of every batch's actual centWave params (each
+    # batch's own ipo_params.rds/ipo_history.csv already has this
+    # individually) -- same idea as the reference's opt_params.csv.
     write.csv(
       do.call(rbind, batch_params_rows),
       file.path(out_dir, "batch_centwave_params.csv"),
       row.names = FALSE
     )
 
-    # Plain c(), not xcms::c() -- xcms registers a combine method for
-    # XCMSnExp on the shared "c" generic (S4 method dispatch finds it
-    # regardless of which package registered it), but doesn't export a
-    # symbol literally named "c" from its own namespace, so `xcms::c`
-    # itself fails ("'c' is not an exported object from 'namespace:xcms'")
-    # even though plain c(...) resolves correctly via dispatch.
+    # Plain c(), not xcms::c() -- xcms registers a combine method on the
+    # shared "c" generic (dispatch finds it regardless of package) but
+    # doesn't export a symbol named "c" from its own namespace, so
+    # `xcms::c` itself fails even though plain c(...) works.
     xdata <- do.call(c, picked_list)
     ordered_sheet <- do.call(rbind, batch_sheets)
   } else {
@@ -157,12 +143,12 @@ for (group_name in names(groups)) {
   }
 
   message(sprintf("\n--- Optimizing retention-time/correspondence params for group: %s ---", group_name))
-  retgroup_params <- run_retgroup_optimization(xdata, out_dir, ordered_sheet$sample_type)
+  retgroup_params <- run_retgroup_optimization(xdata, out_dir, ordered_sheet$sample_type, fresh = ipo_fresh)
 
   message(sprintf("\n--- Aligning and grouping peaks for group: %s ---", group_name))
   xdata <- align_and_correspond(xdata, ordered_sheet$sample_type, retgroup_params)
   feature_table <- build_feature_table(xdata, ordered_sheet$sample_label)
-  save_peak_picking_outputs(xdata, feature_table, out_dir)
+  save_peak_picking_outputs(xdata, feature_table, out_dir, ordered_sheet$sample_label)
 }
 
 message("\nAll groups processed.")
