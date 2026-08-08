@@ -58,15 +58,42 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_q
   message("Running default-parameters findChromPeaks() for quality check...")
   xdata <- with_bp_workers(xcms::findChromPeaks, raw_data, param = xcms::CentWaveParam())
 
-  message("Running adjustRtime()...")
-  xdata <- with_bp_workers(xcms::adjustRtime, xdata, param = xcms::ObiwarpParam())
+  # A file with zero detected peaks has no computable m/z profile range,
+  # which crashes adjustRtime()'s obiwarp alignment outright ("'from' must
+  # be a finite number") rather than just aligning poorly -- and zero peaks
+  # is already the strongest possible "this injection failed" signal, no
+  # threshold comparison needed to know that. Pull these out before
+  # alignment/correspondence so one dead file doesn't take down the whole
+  # group's QC check, and auto-flag them directly.
+  n_files <- nrow(qc_sheet)
+  peak_counts <- tabulate(xcms::chromPeaks(xdata)[, "sample"], nbins = n_files)
+  no_peaks <- peak_counts == 0
+  good_idx <- which(!no_peaks)
 
-  xdata <- with_bp_workers(
-    xcms::groupChromPeaks, xdata, param = xcms::PeakDensityParam(sampleGroups = qc_sheet$sample_type)
-  )
+  if (any(no_peaks)) {
+    message(sprintf(
+      "%d file(s) had zero chromatographic peaks under default params -- excluding from alignment, auto-flagging as likely failed injections:\n  %s",
+      sum(no_peaks), paste(qc_sheet$sample_label[no_peaks], collapse = "\n  ")
+    ))
+  }
 
-  feature_vals <- xcms::featureValues(xdata, value = "into")
-  aligned_feature_count <- colSums(!is.na(feature_vals))
+  aligned_feature_count <- rep(NA_real_, n_files)
+  if (length(good_idx) >= 2) {
+    xdata_good <- if (any(no_peaks)) xcms::filterFile(xdata, file = good_idx) else xdata
+    qc_sheet_good <- qc_sheet[good_idx, , drop = FALSE]
+
+    message("Running adjustRtime()...")
+    xdata_good <- with_bp_workers(xcms::adjustRtime, xdata_good, param = xcms::ObiwarpParam())
+
+    xdata_good <- with_bp_workers(
+      xcms::groupChromPeaks, xdata_good, param = xcms::PeakDensityParam(sampleGroups = qc_sheet_good$sample_type)
+    )
+
+    feature_vals <- xcms::featureValues(xdata_good, value = "into")
+    aligned_feature_count[good_idx] <- colSums(!is.na(feature_vals))
+  } else {
+    message("Fewer than 2 files with any peaks -- skipping alignment, feature-count check unavailable.")
+  }
 
   # TIC prefers an absolute, instrument-specific floor over a
   # batch-distribution threshold: median/MAD both break down once a
@@ -77,30 +104,39 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_q
   instrument_config <- get_instrument_params(instrument, qc_sheet$column[1], qc_sheet$polarity[1])
   has_absolute_tic_floor <- !is.null(instrument_config) && !is.null(instrument_config$int_threshold)
 
-  # Global check: whole group pooled.
+  # Thresholds are computed only from files that actually got peak-picked
+  # -- the auto-flagged zero-peak files would otherwise drag down the
+  # median/floor for everyone else being compared against it.
   if (has_absolute_tic_floor) {
     tic_threshold <- instrument_config$int_threshold
     message(sprintf("Using instrument-specific absolute TIC threshold: %s", tic_threshold))
   } else {
-    tic_threshold <- low_outlier_threshold(tic, min_fraction_of_median)
+    tic_threshold <- low_outlier_threshold(tic[good_idx], min_fraction_of_median)
   }
-  feature_threshold <- low_outlier_threshold(aligned_feature_count, min_fraction_of_median)
+  feature_threshold <- if (length(good_idx) >= 2) {
+    low_outlier_threshold(aligned_feature_count[good_idx], min_fraction_of_median)
+  } else {
+    NA_real_
+  }
 
   tic_flag_global <- tic < tic_threshold
   feature_flag_global <- aligned_feature_count < feature_threshold
+  tic_flag_global[no_peaks] <- TRUE
+  feature_flag_global[no_peaks] <- TRUE
 
   # Per-batch check: a batch could drift as a whole relative to the rest of
   # the group, in which case a file can look "normal" globally while still
   # being an outlier within its own batch (or vice versa) — flag on either.
   # Skipped for batches with too few QC files for a reliable local
   # threshold; the absolute TIC floor (when available) applies per-batch
-  # too, since it's the same physical floor regardless of scope.
+  # too, since it's the same physical floor regardless of scope. Restricted
+  # to peak-picked files for the same reason thresholds above are.
   batches <- qc_sheet$batch
   tic_flag_batch <- rep(FALSE, length(tic))
   feature_flag_batch <- rep(FALSE, length(aligned_feature_count))
 
   for (b in unique(batches)) {
-    idx <- which(batches == b)
+    idx <- which(batches == b & !no_peaks)
     if (length(idx) < min_batch_qc) next
 
     batch_tic_threshold <- if (has_absolute_tic_floor) {
@@ -133,6 +169,7 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_q
     parts <- c(a, b)[!is.na(c(a, b))]
     if (length(parts) == 0) NA_character_ else paste(parts, collapse = " and ")
   }, tic_reason, feature_reason)
+  reason[no_peaks] <- "no chromatographic peaks detected (likely failed injection or empty vial)"
 
   result <- data.frame(
     filepath = qc_sheet$filepath,
