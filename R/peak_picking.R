@@ -408,12 +408,11 @@ save_peak_picking_outputs <- function(xdata, feature_table, out_dir, sample_name
 # Install: renv::install("gitlab::CarlBrunius/IPO2") + nloptr (DESCRIPTION
 # doesn't declare it despite needing it).
 #
-# No cross-evaluation parallelism to register (evaluations are sequential).
+# No cross-evaluation parallelism needed here (evaluations are sequential).
 # The only parallelism is within one evaluation, across the subset's files,
-# inside optimPP()'s findChromPeaks() call (no BPPARAM -> session default)
-# -- same shape as with_bp_workers() elsewhere, which runs fine under
-# SnowParam, so register that instead of forcing SerialParam.
-BiocParallel::register(bp_workers())
+# inside optimPP()'s findChromPeaks() call (no BPPARAM -> session default) --
+# same shape as with_bp_workers() elsewhere, so it rides the SnowParam
+# default registered in R/parallel.R rather than needing its own.
 
 # IPO2's internals call CentWaveParam()/findChromPeaks()/readMSData()
 # unqualified, expecting xcms/MSnbase attached to the search path. True for

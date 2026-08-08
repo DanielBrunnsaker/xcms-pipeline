@@ -5,13 +5,14 @@
 # args for environment subassignment"), and fork() doesn't exist on
 # Windows anyway -- SnowParam is what actually works cross-platform.
 #
-# IPO2::optimXCMS()'s internal findChromPeaks() doesn't take a BPPARAM
-# argument, so it's controlled by the session default backend instead (see
-# R/peak_picking.R, which registers bp_workers() for that reason).
+# IPO2::optimXCMS()'s internal findChromPeaks() call, and some xcms methods
+# in this environment (e.g. adjustRtime()'s ObiwarpParam method), don't take
+# a BPPARAM argument, so they're controlled by the session default backend
+# instead -- registered at the bottom of this file for that reason.
 
 #' Number of parallel workers to use for peak-picking/alignment steps (and
-#' IPO2::optimXCMS()'s internal findChromPeaks() call, via the session
-#' default registered in R/peak_picking.R).
+#' any xcms/IPO2 call that falls back to the session default backend
+#' registered at the bottom of this file).
 #'
 #' Reads the `XCMS_PIPELINE_CORES` env var if set (e.g.
 #' `docker run -e XCMS_PIPELINE_CORES=8 ...`); otherwise defaults to all
@@ -36,7 +37,7 @@ default_worker_count <- function(headroom = 2) {
 
 #' Build the BiocParallel backend for peak-picking/alignment steps —
 #' separate from IPO2's own loop, which is controlled by the session-wide
-#' default registered in R/peak_picking.R.
+#' default registered below.
 bp_workers <- function() {
   BiocParallel::SnowParam(workers = default_worker_count(), progressbar = TRUE)
 }
@@ -66,3 +67,22 @@ with_bp_workers <- function(fn, ...) {
     }
   )
 }
+
+# Register SnowParam as the session-wide BiocParallel default too, not just
+# the explicit BPPARAM passed by with_bp_workers() above. Several xcms calls
+# in this Bioconductor snapshot don't accept BPPARAM at all (e.g.
+# adjustRtime()'s ObiwarpParam method -- see with_bp_workers()) and silently
+# fall back to whatever's registered as default; same for IPO2::optimXCMS()'s
+# internal findChromPeaks() call. Without this, that default is whatever
+# BiocParallel auto-selects for the platform -- MulticoreParam on
+# macOS/Linux, which is the exact backend that hits "wrong args for
+# environment subassignment" (why bp_workers() uses SnowParam explicitly in
+# the first place). Registering here, in the file every pipeline script
+# sources, means every call path gets the known-working backend, not just
+# the ones that happen to source R/peak_picking.R too.
+#
+# Deliberately positioned LAST, after every function above -- in a sandbox
+# that can't bind a SnowParam socket, this is the one line that errors (see
+# tests/testthat/helper-source.R's source_tolerant()), and every function
+# above it must still be defined regardless.
+BiocParallel::register(bp_workers())
