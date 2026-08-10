@@ -8,7 +8,7 @@
 # like the centWave search.
 #
 # Usage:
-#   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size] [ipo_fresh]
+#   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size] [ipo_fresh] [retgroup_qc_type]
 #
 # <folder>: same one passed to generate_sample_sheet.R (or any folder with a
 # hand-curated metadata/sample_sheet.xlsx meeting validate_sample_sheet()'s
@@ -31,6 +31,14 @@
 # checkpoint for every group/batch and re-optimizes from scratch. Default
 # resumes an interrupted run from its checkpoint instead of restarting.
 #
+# [retgroup_qc_type] (default "auto"): force which QC type
+# (sQC|ltQC, case-insensitive) feeds retention-time/correspondence
+# optimization (R/retgroup_optimization.R) for every group, instead of the
+# automatic sQC-first/ltQC-fallback pick. "auto" keeps that automatic
+# behavior. Still errors per group if the forced type doesn't have enough
+# non-flagged files -- see the "QC batch coverage" printout at the start of
+# each group for whether sQC/ltQC actually cover every batch.
+#
 # Output per group, under <folder>/output/<column>_<polarity>/:
 #   - peaks/xdata.rds        full aligned XCMSnExp object
 #   - peaks/peak_table.csv   flat per-peak table (includes gap-filled peaks)
@@ -47,7 +55,10 @@ source("R/retgroup_optimization.R")
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1) {
   stop(
-    "Usage: Rscript scripts/run_peak_picking.R <folder> [ipo_scope: global|batch] [ipo_subset_size] [ipo_fresh: true|false]",
+    paste(
+      "Usage: Rscript scripts/run_peak_picking.R <folder> [ipo_scope: global|batch]",
+      "[ipo_subset_size] [ipo_fresh: true|false] [retgroup_qc_type: auto|sQC|ltQC]"
+    ),
     call. = FALSE
   )
 }
@@ -55,6 +66,7 @@ folder <- args[1]
 ipo_scope <- if (length(args) >= 2) args[2] else "global"
 ipo_subset_size <- if (length(args) >= 3) as.integer(args[3]) else 4
 ipo_fresh <- if (length(args) >= 4) as.logical(args[4]) else FALSE
+retgroup_qc_type <- if (length(args) >= 5) args[5] else "auto"
 
 if (!ipo_scope %in% c("global", "batch")) {
   stop('ipo_scope must be "global" or "batch"', call. = FALSE)
@@ -64,6 +76,9 @@ if (is.na(ipo_subset_size) || ipo_subset_size < 1) {
 }
 if (is.na(ipo_fresh)) {
   stop('ipo_fresh must be "true" or "false"', call. = FALSE)
+}
+if (!tolower(retgroup_qc_type) %in% c("auto", "sqc", "ltqc")) {
+  stop('retgroup_qc_type must be "auto", "sQC", or "ltQC"', call. = FALSE)
 }
 
 sheet_path <- file.path(folder, "metadata", "sample_sheet.xlsx")
@@ -165,7 +180,9 @@ for (group_name in names(groups)) {
 
   message(sprintf("\n--- Optimizing retention-time/correspondence params for group: %s ---", group_name))
   retgroup_params <- run_retgroup_optimization(
-    xdata, out_dir, ordered_sheet$sample_type, qc_flagged = ordered_sheet$qc_flagged, fresh = ipo_fresh
+    xdata, out_dir, ordered_sheet$sample_type, qc_flagged = ordered_sheet$qc_flagged,
+    qc_type = if (tolower(retgroup_qc_type) == "auto") NULL else retgroup_qc_type,
+    fresh = ipo_fresh
   )
 
   message(sprintf("\n--- Aligning and grouping peaks for group: %s ---", group_name))

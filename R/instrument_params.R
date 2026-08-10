@@ -14,8 +14,6 @@
 #   combo not listed here.
 # - bounds: min_peakwidth, max_peakwidth, mzdiff, ppm — each
 #   c(lower, upper), the IPO2 search-space range for that parameter.
-# - int_threshold: absolute intensity floor for the instrument, used as
-#   check_qc_quality()'s TIC threshold when available (R/qc_quality.R).
 
 INSTRUMENT_PARAMS <- list(
   MRT = list(
@@ -36,8 +34,7 @@ INSTRUMENT_PARAMS <- list(
         bounds = list(
           min_peakwidth = c(0.5, 5), max_peakwidth = c(10, 45),
           mzdiff = c(-0.001, 0.01), ppm = c(1, 25)
-        ),
-        int_threshold = 20000
+        )
       ),
       NEG = list(
         starting_values = list(
@@ -47,8 +44,7 @@ INSTRUMENT_PARAMS <- list(
         bounds = list(
           min_peakwidth = c(0.5, 5), max_peakwidth = c(10, 45),
           mzdiff = c(-0.001, 0.01), ppm = c(1, 25)
-        ),
-        int_threshold = 20000
+        )
       )
     ),
     HILIC = list(
@@ -62,8 +58,7 @@ INSTRUMENT_PARAMS <- list(
         # value -- IPO2::optimXCMS() requires the start to sit strictly
         # inside its bounds (start > lower), not just within them.
         mzdiff = c(-0.0015, 0.01), ppm = c(5, 18)
-      ),
-      int_threshold = 10000
+      )
     )
   ),
   SynaptXS = list(
@@ -106,7 +101,7 @@ group_instrument <- function(sheet) {
 #' @param instrument Instrument name (e.g. "MRT"), or NA.
 #' @param column Chromatography column (e.g. "RP", "HILIC").
 #' @param polarity Polarity ("POS" or "NEG").
-#' @return A list (starting_values, bounds, int_threshold), or NULL.
+#' @return A list (starting_values, bounds), or NULL.
 get_instrument_params <- function(instrument, column, polarity) {
   if (is.na(instrument)) {
     return(NULL)

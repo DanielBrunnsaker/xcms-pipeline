@@ -6,6 +6,26 @@
 # means this file's pure logic (select_ipo_subset() etc.) can be sourced
 # and unit-tested without Bioconductor installed. See tests/testthat/.
 
+#' Whether at least one QC tier (sQC or ltQC, non-flagged) has enough files
+#' to be usable on its own for IPO optimization -- same tiering/exclusion
+#' rules as `select_ipo_subset()`'s first two tiers, factored out so
+#' `run_ipo_optimization()` can decide whether to run IPO2 at all *before*
+#' calling `select_ipo_subset()`, rather than let it silently fall through
+#' to regular study samples as the optimization target.
+#'
+#' @param group_sheet Sample sheet rows (same shape `select_ipo_subset()`
+#'   takes).
+#' @param min_qc Minimum non-flagged files for a QC tier to count as usable.
+qc_tier_available <- function(group_sheet, min_qc = 2) {
+  if (!"qc_flagged" %in% names(group_sheet)) {
+    group_sheet$qc_flagged <- FALSE
+  }
+  group_sheet$qc_flagged[is.na(group_sheet$qc_flagged)] <- FALSE
+  group_sheet <- group_sheet[!group_sheet$qc_flagged, , drop = FALSE]
+
+  sum(group_sheet$sample_type == "sQC") >= min_qc || sum(group_sheet$sample_type == "ltQC") >= min_qc
+}
+
 #' Pick a small representative subset of files for parameter optimization.
 #'
 #' Preference order: sQC (stable, repeated matrix) > ltQC (repeated but not
@@ -144,6 +164,12 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #' matching config entry) is available, falling back to
 #' `default_ipo2_search_space()` otherwise.
 #'
+#' If neither QC tier (sQC or ltQC alone) has enough non-flagged files (see
+#' `qc_tier_available()`), skips the IPO2 search entirely and returns that
+#' starting-point CentWaveParam as-is, un-optimized -- rather than let
+#' `select_ipo_subset()` fall through to regular study samples as the
+#' optimization target.
+#'
 #' Sets the `xcms_pipeline.centroid_ipo_input` option before calling
 #' `optimXCMS()` if any subset file is profile-mode -- read by
 #' `patched_optimPP()` (bottom of this file) to centroid in-place, since
@@ -157,8 +183,10 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
 #' @param fresh If TRUE, ignore (and delete) any cached final result or
 #'   mid-search checkpoint from a prior run and re-optimize from scratch,
 #'   rather than reusing/resuming from them.
+#' @param min_qc Passed to `qc_tier_available()`/`select_ipo_subset()` --
+#'   minimum non-flagged files for a QC tier to count as usable.
 #' @return An xcms::CentWaveParam with the optimized settings.
-run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4, fresh = FALSE) {
+run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4, fresh = FALSE, min_qc = 2) {
   params_path <- file.path(out_dir, "ipo_params.rds")
   checkpoint_path <- file.path(out_dir, "ipo_checkpoint.rds")
 
@@ -175,13 +203,49 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4, fres
     return(readRDS(params_path))
   }
 
-  subset_files <- select_ipo_subset(group_sheet, n = ipo_subset_size)
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+  instrument <- group_instrument(group_sheet)
+  instrument_config <- get_instrument_params(
+    instrument, group_sheet$column[1], group_sheet$polarity[1]
+  )
+
+  search_space <- if (!is.null(instrument_config)) {
+    message(sprintf(
+      "Using instrument-specific search space for %s / %s / %s",
+      instrument, group_sheet$column[1], group_sheet$polarity[1]
+    ))
+    build_ipo2_search_space(instrument_config)
+  } else {
+    message("No instrument-specific config found; using generic default search space.")
+    default_ipo2_search_space()
+  }
+
+  # No usable QC (sQC or ltQC alone) means select_ipo_subset() would fall
+  # all the way through to regular study samples as IPO2's optimization
+  # target -- heterogeneous biological material, not what optimXCMS()'s
+  # search is meant to tune against. Rather than run IPO2 on that, skip the
+  # search entirely and use the (already instrument-characterized, when
+  # available) starting point as-is.
+  if (!qc_tier_available(group_sheet, min_qc = min_qc)) {
+    batches <- unique(group_sheet$batch)
+    batch_desc <- if (length(batches) == 1) sprintf("batch: %s, ", batches) else ""
+    message(sprintf(
+      "No usable QC (sQC or ltQC alone, non-flagged) for IPO optimization (%scolumn: %s, polarity: %s) -- skipping the IPO2 search (won't run it against regular study samples) and using the %s centWave starting point as-is.",
+      batch_desc, group_sheet$column[1], group_sheet$polarity[1],
+      if (!is.null(instrument_config)) "instrument-specific" else "generic default"
+    ))
+    centwave_param <- search_space$cwParam
+    saveRDS(centwave_param, params_path)
+    message(sprintf("Saved (un-optimized) params to: %s", params_path))
+    return(centwave_param)
+  }
+
+  subset_files <- select_ipo_subset(group_sheet, n = ipo_subset_size, min_qc = min_qc)
   message(sprintf(
     "Running IPO2 optimization on %d file(s):\n  %s",
     length(subset_files), paste(subset_files, collapse = "\n  ")
   ))
-
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   subset_modes <- get_spectrum_modes(group_sheet)[match(subset_files, group_sheet$filepath)]
   n_profile <- sum(subset_modes == "profile", na.rm = TRUE)
@@ -206,22 +270,6 @@ run_ipo_optimization <- function(group_sheet, out_dir, ipo_subset_size = 4, fres
     xcms_pipeline.ipo_checkpoint_path = checkpoint_path
   )
   on.exit(options(old_opts), add = TRUE)
-
-  instrument <- group_instrument(group_sheet)
-  instrument_config <- get_instrument_params(
-    instrument, group_sheet$column[1], group_sheet$polarity[1]
-  )
-
-  search_space <- if (!is.null(instrument_config)) {
-    message(sprintf(
-      "Using instrument-specific search space for %s / %s / %s",
-      instrument, group_sheet$column[1], group_sheet$polarity[1]
-    ))
-    build_ipo2_search_space(instrument_config)
-  } else {
-    message("No instrument-specific config found; using generic default search space.")
-    default_ipo2_search_space()
-  }
 
   if (file.exists(checkpoint_path)) {
     checkpoint <- readRDS(checkpoint_path)

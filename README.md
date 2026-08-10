@@ -52,10 +52,11 @@ back to `TRUE` once it's ready.
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/check_qc_quality.R /data
 ```
-Flags likely-faulty QC injections (missed injections, empty vials) via TIC and
-aligned feature count. Writes `qc_flagged`/`qc_flag_reason` back into the sheet
-and an interactive report to `metadata/qc_quality_report.html`. Pass `false` to
-check `sQC` alone instead of pooling with `ltQC`:
+Flags likely-faulty QC injections (missed injections, empty vials) via raw
+peak count (primary) and aligned feature count (secondary, more lenient).
+Writes `qc_flagged`/`qc_flag_reason` back into the sheet and an interactive
+report to `metadata/qc_quality_report.html`. Pass `false` to check `sQC`
+alone instead of also checking `ltQC`:
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/check_qc_quality.R /data false
 ```
@@ -66,7 +67,7 @@ docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_pi
 ```
 Optional args: `[ipo_scope]` (`global` default, or `batch` for a separate IPO
 optimization per batch), `[ipo_subset_size]` (default `4`), `[ipo_fresh]`
-(default `false`):
+(default `false`), `[retgroup_qc_type]` (default `auto`):
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 8
 ```
@@ -74,6 +75,14 @@ An interrupted run resumes from its last checkpoint by default. Pass `true` for
 `[ipo_fresh]` to ignore any cache/checkpoint and start over:
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data global 4 true
+```
+Each group's retention-time/correspondence optimization normally picks sQC
+over ltQC automatically (falling back only if sQC is too thin) -- a
+"QC batch coverage" printout at the start of each group shows how many
+batches each type actually covers. Pass `sQC` or `ltQC` as `[retgroup_qc_type]`
+to force one instead of relying on the automatic pick:
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 5 false ltQC
 ```
 
 By default, parallel steps use all cores minus 2. Override with

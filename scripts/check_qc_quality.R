@@ -1,23 +1,28 @@
 # Standalone QC quality check: flags likely-faulty QC injections (missed
-# injections, empty vials, degraded runs) via TIC and aligned feature count
-# vs. group peers. Run after reviewing the sample sheet, before
-# run_peak_picking.R, so a bad QC never becomes IPO's "representative" QC.
+# injections, empty vials, degraded runs) via raw peak count and aligned
+# feature count vs. group peers. Run after reviewing the sample sheet,
+# before run_peak_picking.R, so a bad QC never becomes IPO's
+# "representative" QC.
 #
 # Usage:
 #   Rscript scripts/check_qc_quality.R <folder> [include_ltqc]
 #
-# Checks sQC + ltQC pooled per column x polarity group, unless
-# [include_ltqc] is "false" (default "true").
-# - Pooling: median/MAD have a 50% breakdown point -- pooling with the
-#   other QC type gives the threshold a better shot at a majority-good
-#   population if one type alone is majority-faulty. groupChromPeaks()
-#   still distinguishes sQC/ltQC internally; only outlier-flagging pools.
+# Checks sQC and ltQC per column x polarity group, unless [include_ltqc] is
+# "false" (default "true").
+# - Raw peak count (per file, before alignment) is the primary, stricter
+#   signal -- far less sensitive to concentration than TIC (not used at
+#   all here), so it isolates "did this injection clearly fail" from
+#   "is the signal magnitude a bit different." Aligned feature count is a
+#   secondary, much more lenient check: even a technically-fine injection
+#   is a poor normalization/correction anchor if its peaks don't correspond
+#   well with its peers.
+# - sQC and ltQC are never pooled for either metric's threshold -- different
+#   matrices can have systematically different baselines, so each type is
+#   judged against its own median instead of a shared one. groupChromPeaks()
+#   also groups by sample_type for the same reason. Entirely data-driven
+#   (no fixed absolute floor) -- see check_qc_quality() for why.
 # - include_ltqc "false": check sQC alone if ltQC isn't trusted.
-# - Neither type having enough good files can't be rescued.
-#
-# TIC prefers an absolute, instrument-specific floor (`int_threshold` in
-# R/instrument_params.R) over a batch-distribution threshold, when
-# available -- see check_qc_quality() for why.
+# - A type with too few good files just doesn't get its own threshold.
 #
 # Writes `qc_flagged_global`/`qc_flagged_batch`/`qc_flagged` (either --
 # what select_ipo_subset() excludes on) and `qc_flag_reason` back into the
@@ -98,7 +103,7 @@ for (group_name in names(groups)) {
   sample_sheet$qc_flag_reason[match_idx] <- result$reason
 
   print(result[, c(
-    "filepath", "tic", "aligned_feature_count", "flagged_global", "flagged_batch", "reason"
+    "filepath", "raw_peak_count", "aligned_feature_count", "flagged_global", "flagged_batch", "reason"
   )])
 
   n_flagged <- sum(result$flagged)

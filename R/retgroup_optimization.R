@@ -76,6 +76,63 @@ report_qc_batch_coverage <- function(group_sheet) {
   }
 }
 
+#' Select which QC files feed the retention-time/correspondence
+#' optimization search below: either the automatic sQC-first/ltQC-fallback
+#' pick, or a caller-forced type -- sQC and ltQC are still never pooled
+#' together either way (see this file's header comment for why).
+#'
+#' @param sample_types Character vector of `sample_type` values.
+#' @param qc_flagged Logical vector, same length as `sample_types` --
+#'   excluded from selection. NULL or NA per-element means "not flagged".
+#' @param qc_type Force `"sQC"` or `"ltQC"` (case-insensitive), bypassing
+#'   the automatic fallback below. NULL (default) keeps the automatic
+#'   behavior. Forcing doesn't waive the `min_qc` floor -- still errors if
+#'   the forced type doesn't have enough non-flagged files.
+#' @param min_qc Minimum non-flagged files required for a type to count as
+#'   usable.
+#' @return list(idx = integer indices into `sample_types`, type = "sQC" or
+#'   "ltQC" -- whichever was actually selected, forced = TRUE if `qc_type`
+#'   drove the choice rather than the automatic fallback).
+select_retgroup_qc_idx <- function(sample_types, qc_flagged = NULL, qc_type = NULL, min_qc = 2) {
+  if (is.null(qc_flagged)) {
+    qc_flagged <- rep(FALSE, length(sample_types))
+  }
+  qc_flagged[is.na(qc_flagged)] <- FALSE
+
+  if (!is.null(qc_type)) {
+    canonical <- c(sqc = "sQC", ltqc = "ltQC")
+    key <- tolower(qc_type)
+    if (!key %in% names(canonical)) {
+      stop(sprintf('qc_type must be "sQC" or "ltQC" (got "%s").', qc_type), call. = FALSE)
+    }
+    forced_type <- canonical[[key]]
+    idx <- which(sample_types == forced_type & !qc_flagged)
+    if (length(idx) < min_qc) {
+      stop(sprintf(
+        "qc_type forced to %s, but only %d non-flagged %s file(s) available (need >= %d) for retention-time/correspondence optimization.",
+        forced_type, length(idx), forced_type, min_qc
+      ), call. = FALSE)
+    }
+    return(list(idx = idx, type = forced_type, forced = TRUE))
+  }
+
+  idx <- which(sample_types == "sQC" & !qc_flagged)
+  if (length(idx) >= min_qc) {
+    return(list(idx = idx, type = "sQC", forced = FALSE))
+  }
+
+  ltqc_idx <- which(sample_types == "ltQC" & !qc_flagged)
+  if (length(ltqc_idx) >= min_qc) {
+    return(list(idx = ltqc_idx, type = "ltQC", forced = FALSE))
+  }
+
+  stop(
+    "Not enough non-flagged QC files (sQC or ltQC alone) to run retention-time/",
+    "correspondence optimization for this group. Review qc_flagged in the sample sheet.",
+    call. = FALSE
+  )
+}
+
 #' Run IPO's legacy retention-time-alignment/correspondence parameter
 #' search for one column x polarity group, caching the result to disk.
 #'
@@ -95,6 +152,10 @@ report_qc_batch_coverage <- function(group_sheet) {
 #'   flagged" -- matches the sheet's own opt-out convention
 #'   (`get_included()`), so this stays a no-op for a hand-curated sheet
 #'   that never went through check_qc_quality().
+#' @param qc_type Force `"sQC"` or `"ltQC"` (case-insensitive) for this
+#'   search, bypassing the automatic sQC-first/ltQC-fallback selection --
+#'   see `select_retgroup_qc_idx()`. NULL (default) keeps the automatic
+#'   behavior.
 #' @param n_slaves Number of parallel workers for optimizeRetGroup()'s own
 #'   parallel::makeCluster() (a separate mechanism from BiocParallel/
 #'   bp_workers() used elsewhere in this pipeline).
@@ -107,7 +168,7 @@ report_qc_batch_coverage <- function(group_sheet) {
 #'   run_ipo_optimization()'s.
 #' @return A list(obiwarp = xcms::ObiwarpParam, density_bounds = list(bw=,
 #'   binSize=)) -- see align_and_correspond() for how these get applied.
-run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged = NULL,
+run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged = NULL, qc_type = NULL,
                                        n_slaves = default_worker_count(),
                                        min_qc = 2, fresh = FALSE) {
   params_path <- file.path(out_dir, "retgroup_params.rds")
@@ -134,27 +195,15 @@ run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged =
 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  if (is.null(qc_flagged)) {
-    qc_flagged <- rep(FALSE, length(sample_types))
-  }
-  qc_flagged[is.na(qc_flagged)] <- FALSE
-
-  qc_idx <- which(sample_types == "sQC" & !qc_flagged)
-  if (length(qc_idx) < min_qc) {
-    ltqc_idx <- which(sample_types == "ltQC" & !qc_flagged)
-    if (length(ltqc_idx) >= min_qc) {
-      message(sprintf(
-        "Fewer than %d non-flagged sQC files; using ltQC instead (not pooled with sQC) for retention-time/correspondence optimization.",
-        min_qc
-      ))
-      qc_idx <- ltqc_idx
-    } else {
-      stop(
-        "Not enough non-flagged QC files (sQC or ltQC alone) to run retention-time/",
-        "correspondence optimization for this group. Review qc_flagged in the sample sheet.",
-        call. = FALSE
-      )
-    }
+  qc_selection <- select_retgroup_qc_idx(sample_types, qc_flagged, qc_type, min_qc)
+  qc_idx <- qc_selection$idx
+  if (qc_selection$forced) {
+    message(sprintf("qc_type forced to %s for retention-time/correspondence optimization.", qc_selection$type))
+  } else if (qc_selection$type == "ltQC") {
+    message(sprintf(
+      "Fewer than %d non-flagged sQC files; using ltQC instead (not pooled with sQC) for retention-time/correspondence optimization.",
+      min_qc
+    ))
   }
 
   message(sprintf(

@@ -16,7 +16,6 @@ test_that("get_instrument_params matches a configured instrument/column/polarity
   result <- get_instrument_params("MRT", "RP", "POS")
   expect_false(is.null(result))
   expect_equal(result$starting_values$ppm, 5)
-  expect_equal(result$int_threshold, 20000)
 })
 
 test_that("get_instrument_params matches case-insensitively", {

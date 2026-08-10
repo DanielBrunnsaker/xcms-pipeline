@@ -94,3 +94,36 @@ test_that("select_ipo_subset errors when nothing usable is available", {
   sheet <- make_sheet(2, "Blank", filepath = c("b1", "b2"))
   expect_error(select_ipo_subset(sheet, n = 4, min_qc = 2), "No usable files for IPO optimization")
 })
+
+test_that("qc_tier_available is TRUE when sQC alone has enough", {
+  sheet <- make_sheet(2, "sQC")
+  expect_true(qc_tier_available(sheet, min_qc = 2))
+})
+
+test_that("qc_tier_available is TRUE when only ltQC has enough", {
+  sheet <- rbind(
+    make_sheet(1, "sQC", filepath = "qc1"),
+    make_sheet(2, "ltQC", filepath = paste0("lt", 1:2))
+  )
+  expect_true(qc_tier_available(sheet, min_qc = 2))
+})
+
+test_that("qc_tier_available is FALSE when neither QC tier has enough", {
+  sheet <- rbind(
+    make_sheet(1, "sQC", filepath = "qc1"),
+    make_sheet(1, "ltQC", filepath = "lt1"),
+    make_sheet(5, "Sample", filepath = paste0("s", 1:5), injection_order = 1:5)
+  )
+  expect_false(qc_tier_available(sheet, min_qc = 2))
+})
+
+test_that("qc_tier_available excludes qc_flagged rows before counting", {
+  sheet <- make_sheet(2, "sQC", qc_flagged = c(FALSE, TRUE))
+  expect_false(qc_tier_available(sheet, min_qc = 2))
+})
+
+test_that("qc_tier_available treats a missing qc_flagged column as nothing flagged", {
+  sheet <- make_sheet(2, "sQC")
+  sheet$qc_flagged <- NULL
+  expect_true(qc_tier_available(sheet, min_qc = 2))
+})
