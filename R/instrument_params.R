@@ -8,6 +8,10 @@
 # Each entry:
 # - starting_values: ppm, peakwidth (c(min, max)), snthresh,
 #   prefilter (c(k, int)), mzdiff, noise — fixed (not optimized) settings.
+#   Used both to seed the IPO2 search (R/peak_picking.R) and, via the same
+#   lookup, as check_qc_quality()'s centWave params (R/qc_quality.R) --
+#   falls back to xcms::CentWaveParam()'s generic defaults there for any
+#   combo not listed here.
 # - bounds: min_peakwidth, max_peakwidth, mzdiff, ppm — each
 #   c(lower, upper), the IPO2 search-space range for that parameter.
 # - int_threshold: absolute intensity floor for the instrument, used as
@@ -16,10 +20,18 @@
 INSTRUMENT_PARAMS <- list(
   MRT = list(
     RP = list(
+      # starting_values below are the rounded mean of 3 real IPO2 runs on
+      # MRT/RP/POS (batches B5W17, B6W18, B7W19) -- ppm 5.49->5, peakwidth
+      # (2.62,27.74)->(3,28), mzdiff 0.00238->0.002; snthresh/prefilter/
+      # noise came back identical across all 3 (fixed, not searched) so
+      # kept as-is. max_peakwidth swung a lot across those 3 batches
+      # (15.8-36.4) -- revisit the mean once more batches are in. NEG
+      # borrows POS's numbers as a preliminary stand-in (same instrument/
+      # column, not yet independently verified).
       POS = list(
         starting_values = list(
-          ppm = 6, peakwidth = c(1.7, 22), snthresh = 10,
-          prefilter = c(5, 45000), mzdiff = 0.0017, noise = 20000
+          ppm = 5, peakwidth = c(3, 28), snthresh = 10,
+          prefilter = c(5, 45000), mzdiff = 0.002, noise = 20000
         ),
         bounds = list(
           min_peakwidth = c(0.5, 5), max_peakwidth = c(10, 45),
@@ -29,8 +41,8 @@ INSTRUMENT_PARAMS <- list(
       ),
       NEG = list(
         starting_values = list(
-          ppm = 6, peakwidth = c(1.7, 22), snthresh = 10,
-          prefilter = c(5, 45000), mzdiff = 0.0017, noise = 20000
+          ppm = 5, peakwidth = c(3, 28), snthresh = 10,
+          prefilter = c(5, 45000), mzdiff = 0.002, noise = 20000
         ),
         bounds = list(
           min_peakwidth = c(0.5, 5), max_peakwidth = c(10, 45),

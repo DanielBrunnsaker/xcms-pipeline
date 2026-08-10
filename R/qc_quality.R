@@ -56,8 +56,25 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_q
   tic <- vapply(tic_by_file, sum, numeric(1))
   tic <- tic[order(as.integer(names(tic)))]
 
-  message("Running default-parameters findChromPeaks() for quality check...")
-  xdata <- with_bp_workers(xcms::findChromPeaks, raw_data, param = xcms::CentWaveParam())
+  # Looked up once, up front -- used both for the centWave params below and
+  # the TIC threshold further down.
+  instrument <- group_instrument(qc_sheet)
+  instrument_config <- get_instrument_params(instrument, qc_sheet$column[1], qc_sheet$polarity[1])
+  has_instrument_config <- !is.null(instrument_config)
+
+  # xcms::CentWaveParam()'s bare defaults (ppm=25 among others) are generic
+  # library defaults, not tuned to any real instrument -- reuse the same
+  # instrument-characterized starting_values used to seed the IPO2 search
+  # instead, when available.
+  centwave_param <- if (has_instrument_config) {
+    message("Using instrument-specific centWave params for quality check.")
+    build_centwave_param(instrument_config$starting_values)
+  } else {
+    xcms::CentWaveParam()
+  }
+
+  message("Running findChromPeaks() for quality check...")
+  xdata <- with_bp_workers(xcms::findChromPeaks, raw_data, param = centwave_param)
 
   # A file with zero detected peaks has no computable m/z profile range,
   # which crashes adjustRtime()'s obiwarp alignment outright ("'from' must
@@ -101,9 +118,7 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_q
   # majority of a batch's QCs are actually bad. No equivalent absolute
   # reference exists for feature count (method/sample-dependent, not just
   # instrument-dependent), so that one stays relative.
-  instrument <- group_instrument(qc_sheet)
-  instrument_config <- get_instrument_params(instrument, qc_sheet$column[1], qc_sheet$polarity[1])
-  has_absolute_tic_floor <- !is.null(instrument_config) && !is.null(instrument_config$int_threshold)
+  has_absolute_tic_floor <- has_instrument_config && !is.null(instrument_config$int_threshold)
 
   # Thresholds are computed only from files that actually got peak-picked
   # -- the auto-flagged zero-peak files would otherwise drag down the
