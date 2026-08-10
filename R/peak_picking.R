@@ -92,14 +92,31 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
   group_sheet$qc_flagged[is.na(group_sheet$qc_flagged)] <- FALSE
   group_sheet <- group_sheet[!group_sheet$qc_flagged, , drop = FALSE]
 
+  # pick_representative()/pick_spread() cap silently at however many rows a
+  # tier actually has -- clearing min_qc only means the tier is usable at
+  # all, not that it has n files. Warn here so a thin tier (e.g. 3 files
+  # when 4 were requested) is visible rather than quietly optimizing
+  # against fewer files than the caller asked for.
+  return_subset <- function(rows, tier_label) {
+    picked <- pick_representative(prefer_uniform_mode(rows, n), n)
+    if (length(picked) < n) {
+      message(sprintf(
+        "Only %d %s file(s) available (of %d requested) for column: %s, polarity: %s%s -- optimizing against fewer files than ipo_subset_size.",
+        length(picked), tier_label, n, group_sheet$column[1], group_sheet$polarity[1],
+        if (length(unique(group_sheet$batch)) == 1) sprintf(", batch: %s", group_sheet$batch[1]) else ""
+      ))
+    }
+    picked
+  }
+
   sqc_rows <- group_sheet[group_sheet$sample_type == "sQC", , drop = FALSE]
   if (nrow(sqc_rows) >= min_qc) {
-    return(pick_representative(prefer_uniform_mode(sqc_rows, n), n))
+    return(return_subset(sqc_rows, "sQC"))
   }
 
   ltqc_rows <- group_sheet[group_sheet$sample_type == "ltQC", , drop = FALSE]
   if (nrow(ltqc_rows) >= min_qc) {
-    return(pick_representative(prefer_uniform_mode(ltqc_rows, n), n))
+    return(return_subset(ltqc_rows, "ltQC"))
   }
 
   regular_rows <- group_sheet[group_sheet$sample_type == "Sample", , drop = FALSE]
@@ -116,7 +133,7 @@ select_ipo_subset <- function(group_sheet, n = 4, min_qc = 2) {
     ), call. = FALSE)
   }
 
-  pick_representative(prefer_uniform_mode(regular_rows, n), n)
+  return_subset(regular_rows, "regular sample")
 }
 
 #' Run IPO2 optimization for one column x polarity group, caching the result

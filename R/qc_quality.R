@@ -43,10 +43,11 @@ flag_low_outliers <- function(x, min_fraction_of_median = 0.5) {
 #'   absolute threshold exists.
 #' @param min_batch_qc Minimum QC files for a batch to get its own local
 #'   threshold (below this, relies on the global check alone).
-#' @return A data.frame with one row per file: filepath, tic,
-#'   aligned_feature_count, flagged_global, flagged_batch, flagged, reason.
-#'   `tic_threshold`/`feature_threshold` attributes carry the actual
-#'   thresholds used (so reporting doesn't need to recompute them).
+#' @return A data.frame with one row per file: filepath, sample_label, batch,
+#'   injection_order, tic, aligned_feature_count, flagged_global,
+#'   flagged_batch, flagged, reason. `tic_threshold`/`feature_threshold`
+#'   attributes carry the actual thresholds used (so reporting doesn't need
+#'   to recompute them).
 check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_qc = 2) {
   message(sprintf("Reading %d QC file(s) for quality check...", nrow(qc_sheet)))
   raw_data <- read_raw_data(qc_sheet$filepath, get_spectrum_modes(qc_sheet))
@@ -175,6 +176,7 @@ check_qc_quality <- function(qc_sheet, min_fraction_of_median = 0.5, min_batch_q
     filepath = qc_sheet$filepath,
     sample_label = qc_sheet$sample_label,
     batch = qc_sheet$batch,
+    injection_order = qc_sheet$injection_order,
     tic = tic,
     aligned_feature_count = aligned_feature_count,
     flagged_global = tic_flag_global | feature_flag_global,
@@ -196,12 +198,21 @@ to_rgba <- function(color, alpha) {
 }
 
 #' Interactive plotly bar chart of one QC quality metric.
+#' - X-axis is `injection_order` (see `scan_mzml_files()`) -- a global,
+#'   chronological rank across the whole dataset, preferring true mzML
+#'   acquisition timestamps over the filename-encoded number when every
+#'   file's timestamp is readable. Unlike batch+sample_label, this is
+#'   guaranteed unique on its own: a batch commonly splits into 2+ runlist
+#'   halves, so the same QC name (e.g. "ltQC01") can legitimately repeat
+#'   within one batch without a plate token to disambiguate it, which
+#'   otherwise both misrepresents run order and can crash plot_ly() outright
+#'   (duplicate factor levels).
 #' - Colored by batch (fixed HCL hue order). One real trace with precomputed
 #'   per-bar colors -- one trace per batch is a known plotly footgun that
 #'   mis-aligns/stacks bars. Invisible per-batch "legend only" traces supply
 #'   the clickable legend instead.
 #' - Flagged = faded (reduced alpha), passed = opaque.
-#' - Hover shows sample/batch/value/status/reason.
+#' - Hover shows sample/batch/injection order/value/status/reason.
 #' - Threshold drawn as a labeled line (global only; per-batch scope shown
 #'   in hover `reason` instead).
 #'
@@ -212,10 +223,12 @@ to_rgba <- function(color, alpha) {
 #'   was flagged, if it was.
 #' @param threshold Numeric threshold to draw as a horizontal line.
 #' @param labels Character vector of bar labels (e.g. sample_label).
+#' @param injection_order Numeric vector, same length/order as `values` —
+#'   the x-axis position (see above).
 #' @param title Plot title.
 #' @param ylab Y-axis label.
 #' @return A plotly htmlwidget.
-plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels, title, ylab) {
+plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels, injection_order, title, ylab) {
   unique_batches <- sort(unique(batches))
   batch_colors <- stats::setNames(
     grDevices::hcl.colors(length(unique_batches), palette = "Dynamic"), unique_batches
@@ -225,17 +238,21 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
     function(b, f) to_rgba(batch_colors[[b]], if (f) 0.3 else 1), batches, flagged
   )
   status <- ifelse(flagged, sprintf("Flagged (%s)", reasons), "Passed")
-  hover <- sprintf("%s<br>Batch: %s<br>%s: %.4g<br>%s", labels, batches, ylab, values, status)
+  hover <- sprintf(
+    "%s<br>Batch: %s<br>Injection order: %d<br>%s: %.4g<br>%s",
+    labels, batches, injection_order, ylab, values, status
+  )
 
-  # sample_label is only guaranteed unique *within* a batch — this chart
-  # pools QC files across every batch in the group, so the same label can
-  # legitimately repeat across batches. Use batch+label as the underlying
-  # x-axis key (guaranteed unique) but display just the plain label as
-  # tick text.
-  x_keys <- paste(batches, labels, sep = " / ")
+  # plot_ly()'s bar trace silently drops any point whose y is NA ("Ignoring
+  # N observations") rather than drawing a zero-height bar -- e.g. the
+  # aligned-feature-count chart for a file check_qc_quality() excluded from
+  # correspondence entirely (zero peaks). Hover text already renders NA
+  # values as literal "NA" (see sprintf("%.4g", NA) above), so only the
+  # plotted height needs substituting -- the underlying data stays NA.
+  plot_values <- ifelse(is.na(values), 0, values)
 
   p <- plotly::plot_ly(
-    x = factor(x_keys, levels = x_keys), y = values, type = "bar",
+    x = injection_order, y = plot_values, type = "bar",
     marker = list(color = bar_colors, line = list(width = 0)),
     text = hover, hoverinfo = "text", showlegend = FALSE
   )
@@ -243,7 +260,7 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
   # Invisible dummy traces just to populate a clickable batch-color legend.
   for (b in unique_batches) {
     p <- plotly::add_trace(
-      p, x = x_keys[1], y = 0, type = "bar", name = b,
+      p, x = injection_order[1], y = 0, type = "bar", name = b,
       marker = list(color = to_rgba(batch_colors[[b]], 1)),
       visible = "legendonly", hoverinfo = "skip", showlegend = TRUE
     )
@@ -252,7 +269,7 @@ plot_qc_metric <- function(values, flagged, batches, reasons, threshold, labels,
   plotly::layout(
     p,
     title = title,
-    xaxis = list(title = "", type = "category", showticklabels = FALSE),
+    xaxis = list(title = "Injection order", type = "linear"),
     yaxis = list(title = ylab),
     shapes = list(list(
       type = "line", x0 = 0, x1 = 1, xref = "paper",
@@ -285,12 +302,14 @@ generate_qc_report <- function(results_by_group, out_path) {
 
     plots[[length(plots) + 1]] <- plot_qc_metric(
       result$tic, result$flagged, result$batch, result$reason, attr(result, "tic_threshold"),
-      result$sample_label, sprintf("%s — Total ion current (TIC)", group_name), "TIC"
+      result$sample_label, result$injection_order,
+      sprintf("%s — Total ion current (TIC)", group_name), "TIC"
     )
     plots[[length(plots) + 1]] <- plot_qc_metric(
       result$aligned_feature_count, result$flagged, result$batch, result$reason,
       attr(result, "feature_threshold"),
-      result$sample_label, sprintf("%s — Aligned feature count", group_name), "Feature count"
+      result$sample_label, result$injection_order,
+      sprintf("%s — Aligned feature count", group_name), "Feature count"
     )
   }
 
