@@ -33,6 +33,43 @@
 # internally consistent but not with each other, so pooling would look like
 # noise to the algorithm. Pick one exclusively.
 
+#' Report, per group, how many distinct batches each QC type (sQC/ltQC)
+#' actually has non-flagged coverage in. Purely diagnostic -- doesn't change
+#' which type `run_retgroup_optimization()` ends up using (that's still
+#' decided by pooled count across the whole group, not batch coverage, see
+#' this file's header comment for why pooling the two types is avoided).
+#' Meant to be called once per group at the start of peak picking, so a
+#' coverage gap is visible up front rather than discovered only after
+#' interpreting a group's alignment results.
+#'
+#' @param group_sheet Sample sheet rows for one column x polarity group,
+#'   every batch (this checks `qc_flagged` itself -- don't pre-filter).
+report_qc_batch_coverage <- function(group_sheet) {
+  qc_flagged <- group_sheet$qc_flagged
+  if (is.null(qc_flagged)) {
+    qc_flagged <- rep(FALSE, nrow(group_sheet))
+  }
+  qc_flagged[is.na(qc_flagged)] <- FALSE
+
+  all_batches <- sort(unique(group_sheet$batch))
+
+  for (qc_type in c("sQC", "ltQC")) {
+    covered_batches <- sort(unique(group_sheet$batch[group_sheet$sample_type == qc_type & !qc_flagged]))
+    missing_batches <- setdiff(all_batches, covered_batches)
+
+    message(sprintf(
+      "%s batch coverage: %d/%d batches have at least one non-flagged file.",
+      qc_type, length(covered_batches), length(all_batches)
+    ))
+    if (length(missing_batches) > 0) {
+      warning(sprintf(
+        "%s has no non-flagged files at all for %d batch(es): %s -- if %s ends up used for retention-time/correspondence optimization, these batches won't be represented in that search (still aligned using the group's shared params, just not part of what tuned them).",
+        qc_type, length(missing_batches), paste(missing_batches, collapse = ", "), qc_type
+      ), call. = FALSE)
+    }
+  }
+}
+
 #' Run IPO's legacy retention-time-alignment/correspondence parameter
 #' search for one column x polarity group, caching the result to disk.
 #'
@@ -43,6 +80,15 @@
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
 #' @param sample_types Character vector of `sample_type` values, one per
 #'   file, in the same order as files in `xdata`.
+#' @param qc_flagged Logical vector, same length/order as `sample_types` --
+#'   `check_qc_quality()`'s `qc_flagged` column, if available. Excluded from
+#'   the sQC/ltQC selection below (same reasoning as
+#'   `select_ipo_subset()`'s: `optimizeRetGroup()`'s scoring assumes "this
+#'   is the same sample repeated, should look identical", which a
+#'   known-bad QC violates). NULL (default) or NA per-element means "not
+#'   flagged" -- matches the sheet's own opt-out convention
+#'   (`get_included()`), so this stays a no-op for a hand-curated sheet
+#'   that never went through check_qc_quality().
 #' @param n_slaves Number of parallel workers for optimizeRetGroup()'s own
 #'   parallel::makeCluster() (a separate mechanism from BiocParallel/
 #'   bp_workers() used elsewhere in this pipeline).
@@ -55,7 +101,8 @@
 #'   run_ipo_optimization()'s.
 #' @return A list(obiwarp = xcms::ObiwarpParam, density_bounds = list(bw=,
 #'   binSize=)) -- see align_and_correspond() for how these get applied.
-run_retgroup_optimization <- function(xdata, out_dir, sample_types, n_slaves = default_worker_count(),
+run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged = NULL,
+                                       n_slaves = default_worker_count(),
                                        min_qc = 2, fresh = FALSE) {
   params_path <- file.path(out_dir, "retgroup_params.rds")
 
@@ -81,19 +128,24 @@ run_retgroup_optimization <- function(xdata, out_dir, sample_types, n_slaves = d
 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  qc_idx <- which(sample_types == "sQC")
+  if (is.null(qc_flagged)) {
+    qc_flagged <- rep(FALSE, length(sample_types))
+  }
+  qc_flagged[is.na(qc_flagged)] <- FALSE
+
+  qc_idx <- which(sample_types == "sQC" & !qc_flagged)
   if (length(qc_idx) < min_qc) {
-    ltqc_idx <- which(sample_types == "ltQC")
+    ltqc_idx <- which(sample_types == "ltQC" & !qc_flagged)
     if (length(ltqc_idx) >= min_qc) {
       message(sprintf(
-        "Fewer than %d sQC files; using ltQC instead (not pooled with sQC) for retention-time/correspondence optimization.",
+        "Fewer than %d non-flagged sQC files; using ltQC instead (not pooled with sQC) for retention-time/correspondence optimization.",
         min_qc
       ))
       qc_idx <- ltqc_idx
     } else {
       stop(
-        "Not enough QC files (sQC or ltQC alone) to run retention-time/",
-        "correspondence optimization for this group.",
+        "Not enough non-flagged QC files (sQC or ltQC alone) to run retention-time/",
+        "correspondence optimization for this group. Review qc_flagged in the sample sheet.",
         call. = FALSE
       )
     }

@@ -107,6 +107,9 @@ for (group_name in names(groups)) {
   group_sheet <- groups[[group_name]]
   out_dir <- file.path(output_root, group_name)
 
+  message(sprintf("\n=== QC batch coverage for group: %s ===", group_name))
+  report_qc_batch_coverage(group_sheet)
+
   # Same snapshot as the root-level one (copied, not regenerated, so every
   # copy is byte-identical) -- keeps this group's folder self-contained and
   # traceable even if it's later copied/archived on its own.
@@ -161,7 +164,9 @@ for (group_name in names(groups)) {
   }
 
   message(sprintf("\n--- Optimizing retention-time/correspondence params for group: %s ---", group_name))
-  retgroup_params <- run_retgroup_optimization(xdata, out_dir, ordered_sheet$sample_type, fresh = ipo_fresh)
+  retgroup_params <- run_retgroup_optimization(
+    xdata, out_dir, ordered_sheet$sample_type, qc_flagged = ordered_sheet$qc_flagged, fresh = ipo_fresh
+  )
 
   message(sprintf("\n--- Aligning and grouping peaks for group: %s ---", group_name))
   xdata <- align_and_correspond(xdata, ordered_sheet$sample_type, retgroup_params)
