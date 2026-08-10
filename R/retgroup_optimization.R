@@ -62,10 +62,16 @@ report_qc_batch_coverage <- function(group_sheet) {
       qc_type, length(covered_batches), length(all_batches)
     ))
     if (length(missing_batches) > 0) {
-      warning(sprintf(
-        "%s has no non-flagged files at all for %d batch(es): %s -- if %s ends up used for retention-time/correspondence optimization, these batches won't be represented in that search (still aligned using the group's shared params, just not part of what tuned them).",
+      # message(), not warning() -- this loop is one iteration of a much
+      # bigger for loop in scripts/run_peak_picking.R that processes every
+      # group; a real warning() gets buffered by R and only dumped after
+      # the WHOLE loop finishes (every group, all the expensive centWave/
+      # alignment work included), not right here where it's actually
+      # useful. message() prints immediately instead.
+      message(sprintf(
+        "WARNING: %s has no non-flagged files at all for %d batch(es): %s -- if %s ends up used for retention-time/correspondence optimization, these batches won't be represented in that search (still aligned using the group's shared params, just not part of what tuned them).",
         qc_type, length(missing_batches), paste(missing_batches, collapse = ", "), qc_type
-      ), call. = FALSE)
+      ))
     }
   }
 }
