@@ -28,8 +28,10 @@
 # better batch coverage, higher per-trial cost.
 #
 # [ipo_fresh] (default "false"): "true" ignores any cached result/
-# checkpoint for every group/batch and re-optimizes from scratch. Default
-# resumes an interrupted run from its checkpoint instead of restarting.
+# checkpoint for every group/batch and re-optimizes from scratch, and also
+# discards any cached picked-peaks result (picked_peaks.rds -- see below).
+# Default resumes an interrupted run from its checkpoint/cache instead of
+# restarting.
 #
 # [retgroup_qc_type] (default "auto"): force which QC type
 # (sQC|ltQC, case-insensitive) feeds retention-time/correspondence
@@ -40,6 +42,11 @@
 # each group for whether sQC/ltQC actually cover every batch.
 #
 # Output per group, under <folder>/output/<column>_<polarity>/:
+#   - picked_peaks.rds       cached pick_peaks() result (per batch, under
+#                            <batch>/, in batch scope) -- an interrupted run
+#                            resumes without re-running findChromPeaks() on
+#                            an already-picked batch/group. Auto-invalidated
+#                            if files/params changed since it was written.
 #   - peaks/xdata.rds        full aligned XCMSnExp object
 #   - peaks/peak_table.csv   flat per-peak table (includes gap-filled peaks)
 #   - feature_table.csv      aligned feature table: one row per feature, one
@@ -145,8 +152,9 @@ for (group_name in names(groups)) {
 
       batch_out_dir <- file.path(out_dir, batch_name)
       centwave_param <- run_ipo_optimization(batch_sheet, batch_out_dir, ipo_subset_size, fresh = ipo_fresh)
-      picked_list[[batch_name]] <- pick_peaks(
-        batch_sheet$filepath, centwave_param, get_spectrum_modes(batch_sheet)
+      picked_list[[batch_name]] <- pick_peaks_cached(
+        batch_sheet$filepath, centwave_param, get_spectrum_modes(batch_sheet),
+        cache_path = file.path(batch_out_dir, "picked_peaks.rds"), fresh = ipo_fresh
       )
       batch_params_rows[[batch_name]] <- cbind(
         batch = batch_name, centwave_param_to_row(centwave_param)
@@ -174,7 +182,10 @@ for (group_name in names(groups)) {
     ))
 
     centwave_param <- run_ipo_optimization(group_sheet, out_dir, ipo_subset_size, fresh = ipo_fresh)
-    xdata <- pick_peaks(group_sheet$filepath, centwave_param, get_spectrum_modes(group_sheet))
+    xdata <- pick_peaks_cached(
+      group_sheet$filepath, centwave_param, get_spectrum_modes(group_sheet),
+      cache_path = file.path(out_dir, "picked_peaks.rds"), fresh = ipo_fresh
+    )
     ordered_sheet <- group_sheet
   }
 

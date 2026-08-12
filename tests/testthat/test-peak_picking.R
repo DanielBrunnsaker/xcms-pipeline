@@ -127,3 +127,106 @@ test_that("qc_tier_available treats a missing qc_flagged column as nothing flagg
   sheet$qc_flagged <- NULL
   expect_true(qc_tier_available(sheet, min_qc = 2))
 })
+
+test_that("pick_peaks_cached calls pick_fn and writes a cache on a miss", {
+  cache_path <- tempfile()
+  on.exit(unlink(cache_path))
+  calls <- 0
+  stub_pick <- function(filepaths, centwave_param, spectrum_modes) {
+    calls <<- calls + 1
+    "picked-result"
+  }
+  result <- pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  expect_equal(result, "picked-result")
+  expect_equal(calls, 1)
+  expect_true(file.exists(cache_path))
+  expect_false(file.exists(paste0(cache_path, ".tmp")))
+})
+
+test_that("pick_peaks_cached reuses the cache when files/params match exactly", {
+  cache_path <- tempfile()
+  on.exit(unlink(cache_path))
+  calls <- 0
+  stub_pick <- function(filepaths, centwave_param, spectrum_modes) {
+    calls <<- calls + 1
+    "picked-result"
+  }
+  pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  result <- pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  expect_equal(result, "picked-result")
+  expect_equal(calls, 1) # second call was a cache hit, pick_fn not called again
+})
+
+test_that("pick_peaks_cached recomputes when centwave_param differs from the cache", {
+  cache_path <- tempfile()
+  on.exit(unlink(cache_path))
+  calls <- 0
+  stub_pick <- function(filepaths, centwave_param, spectrum_modes) {
+    calls <<- calls + 1
+    sprintf("picked-%d", centwave_param$ppm)
+  }
+  pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  result <- pick_peaks_cached(c("a", "b"), list(ppm = 10), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  expect_equal(result, "picked-10")
+  expect_equal(calls, 2)
+})
+
+test_that("pick_peaks_cached recomputes when filepaths differ from the cache", {
+  cache_path <- tempfile()
+  on.exit(unlink(cache_path))
+  calls <- 0
+  stub_pick <- function(filepaths, centwave_param, spectrum_modes) {
+    calls <<- calls + 1
+    "picked-result"
+  }
+  pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  pick_peaks_cached(c("a", "c"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  expect_equal(calls, 2)
+})
+
+test_that("pick_peaks_cached ignores a corrupt cache file and recomputes", {
+  cache_path <- tempfile()
+  on.exit(unlink(cache_path))
+  writeLines("not a valid rds file", cache_path)
+  calls <- 0
+  stub_pick <- function(filepaths, centwave_param, spectrum_modes) {
+    calls <<- calls + 1
+    "picked-result"
+  }
+  result <- pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  expect_equal(result, "picked-result")
+  expect_equal(calls, 1)
+})
+
+test_that("pick_peaks_cached with fresh = TRUE ignores and overwrites an existing cache", {
+  cache_path <- tempfile()
+  on.exit(unlink(cache_path))
+  calls <- 0
+  stub_pick <- function(filepaths, centwave_param, spectrum_modes) {
+    calls <<- calls + 1
+    "picked-result"
+  }
+  pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, pick_fn = stub_pick
+  )
+  pick_peaks_cached(c("a", "b"), list(ppm = 5), c("centroid", "centroid"),
+    cache_path = cache_path, fresh = TRUE, pick_fn = stub_pick
+  )
+  expect_equal(calls, 2)
+})

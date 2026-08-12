@@ -117,6 +117,10 @@ output/<column>_<polarity>/
   ipo_history.rds/.csv          optimizer result summary
   batch_centwave_params.csv     batch scope only: every batch's params,
                                 side by side
+  picked_peaks.rds              cached findChromPeaks() result (per-batch
+                                under <batch>/ in batch scope) -- resume
+                                skips re-picking an already-done batch/group;
+                                auto-invalidated if files/params changed
   retgroup_params.rds           optimized alignment/correspondence params
   retgroup_history.rds          full optimizeRetGroup() result
   peaks/xdata.rds               full aligned XCMSnExp object
@@ -131,7 +135,9 @@ output/<column>_<polarity>/
 ## Notes
 
 - Every script is re-runnable: sample sheet/QC steps back up the sheet before
-  overwriting it; peak picking caches IPO results and checkpoints mid-search.
+  overwriting it; peak picking caches IPO results, checkpoints mid-search, and
+  caches each batch/group's picked peaks so an interrupted run doesn't
+  re-`findChromPeaks()` from scratch.
 - `R/instrument_params.R` holds per-instrument/column/polarity CentWave
   settings and search bounds — edit it to add or tune instruments.
 - Rebuild the image after any code change; a container won't pick up new

@@ -343,6 +343,73 @@ pick_peaks <- function(filepaths, centwave_param, spectrum_modes = NULL) {
   with_bp_workers(xcms::findChromPeaks, raw_data, param = centwave_param)
 }
 
+#' `pick_peaks()`, cached to disk -- so an interrupted run (during a later
+#' batch's picking, or during alignment/correspondence after picking
+#' finished) doesn't have to re-read and re-`findChromPeaks()` every file in
+#' an already-completed batch/group from scratch.
+#'
+#' Validity isn't presence-only: the cache is invalidated (silently
+#' recomputed) if `filepaths`, `centwave_param`, or `spectrum_modes` don't
+#' `identical()`-match what's on disk -- e.g. a re-optimized IPO2 result, or
+#' an edited sample sheet, must never be served stale peaks. Written
+#' atomically (temp file + `file.rename()`) so a kill mid-write can never
+#' leave a corrupt file at the real cache path; a read failure of any kind
+#' (corrupt/truncated/foreign file) falls back to recomputing rather than
+#' erroring the whole run.
+#'
+#' @param filepaths,centwave_param,spectrum_modes Passed to `pick_fn()`
+#'   (`pick_peaks()` by default -- overridable for testing without
+#'   Bioconductor installed).
+#' @param cache_path Where to read/write the cached result, e.g.
+#'   `file.path(out_dir, "picked_peaks.rds")`.
+#' @param fresh If TRUE, ignore and delete any existing cache, recomputing
+#'   unconditionally (mirrors `run_ipo_optimization()`'s `fresh`).
+#' @param pick_fn Function called as `pick_fn(filepaths, centwave_param,
+#'   spectrum_modes)` on a cache miss. Defaults to `pick_peaks()`.
+#' @return An XCMSnExp with peaks picked (same as `pick_peaks()`).
+pick_peaks_cached <- function(filepaths, centwave_param, spectrum_modes, cache_path,
+                               fresh = FALSE, pick_fn = pick_peaks) {
+  if (fresh) {
+    if (file.exists(cache_path)) {
+      message("fresh = TRUE: ignoring cached peak-picking result, recomputing.")
+    }
+    unlink(cache_path)
+  }
+
+  if (file.exists(cache_path)) {
+    cached <- tryCatch(readRDS(cache_path), error = function(e) {
+      message(sprintf(
+        "Cached peak-picking result at %s failed to load (%s) -- recomputing.",
+        cache_path, conditionMessage(e)
+      ))
+      NULL
+    })
+    if (!is.null(cached) &&
+      identical(cached$filepaths, filepaths) &&
+      identical(cached$centwave_param, centwave_param) &&
+      identical(cached$spectrum_modes, spectrum_modes)) {
+      message(sprintf("Using cached peak-picking result: %s", cache_path))
+      return(cached$xdata)
+    }
+    if (!is.null(cached)) {
+      message("Cached peak-picking result doesn't match current files/params -- recomputing.")
+    }
+  }
+
+  xdata <- pick_fn(filepaths, centwave_param, spectrum_modes)
+
+  dir.create(dirname(cache_path), recursive = TRUE, showWarnings = FALSE)
+  tmp_path <- paste0(cache_path, ".tmp")
+  saveRDS(
+    list(filepaths = filepaths, centwave_param = centwave_param, spectrum_modes = spectrum_modes, xdata = xdata),
+    tmp_path
+  )
+  file.rename(tmp_path, cache_path)
+  message(sprintf("Cached peak-picking result to: %s", cache_path))
+
+  xdata
+}
+
 #' Turns individually-picked peaks into one aligned feature table: aligns
 #' retention times, groups into cross-sample features, fills gaps. Same
 #' steps as the reference pipeline (adjustRtime -> groupChromPeaks ->
