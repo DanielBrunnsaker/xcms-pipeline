@@ -81,7 +81,27 @@ report_qc_batch_coverage <- function(group_sheet) {
 #' pick, or a caller-forced type -- sQC and ltQC are still never pooled
 #' together either way (see this file's header comment for why).
 #'
+#' `min_qc` gates the sQC/ltQC fallback decision against the *full*
+#' non-flagged population (is this type usable at all) -- separately,
+#' `n_per_batch` then subsamples down to a small representative set, spread
+#' evenly across `injection_order` within each batch, same idea as
+#' `select_ipo_subset()`'s spreading for the centWave search. Matches the
+#' reference pipeline's approach (Part 3 reuses each batch's ~5-file Part 1
+#' subsample rather than the full QC population) -- feeding
+#' `IPO::optimizeRetGroup()` every QC file in a large study (hundreds) makes
+#' each of its DoE evaluations (a full obiwarp alignment + correspondence
+#' over every file passed in) redone that many more times over, without a
+#' meaningfully different result: the search still sees every batch's
+#' retention-time behavior, just via a handful of files each rather than
+#' all of them.
+#'
 #' @param sample_types Character vector of `sample_type` values.
+#' @param batches Character vector, same length as `sample_types` -- which
+#'   batch each file belongs to. Defaults to treating every file as one
+#'   batch (keeps this usable/testable without real batch structure).
+#' @param injection_order Numeric vector, same length as `sample_types` --
+#'   used to spread the per-batch subsample evenly across time rather than
+#'   picking arbitrarily. Defaults to input order.
 #' @param qc_flagged Logical vector, same length as `sample_types` --
 #'   excluded from selection. NULL or NA per-element means "not flagged".
 #' @param qc_type Force `"sQC"` or `"ltQC"` (case-insensitive), bypassing
@@ -90,14 +110,32 @@ report_qc_batch_coverage <- function(group_sheet) {
 #'   the forced type doesn't have enough non-flagged files.
 #' @param min_qc Minimum non-flagged files required for a type to count as
 #'   usable.
+#' @param n_per_batch Max files to keep per batch after subsampling (a
+#'   batch with fewer than this just keeps all of them).
 #' @return list(idx = integer indices into `sample_types`, type = "sQC" or
 #'   "ltQC" -- whichever was actually selected, forced = TRUE if `qc_type`
 #'   drove the choice rather than the automatic fallback).
-select_retgroup_qc_idx <- function(sample_types, qc_flagged = NULL, qc_type = NULL, min_qc = 2) {
+select_retgroup_qc_idx <- function(sample_types, batches = NULL, injection_order = NULL,
+                                    qc_flagged = NULL, qc_type = NULL, min_qc = 2, n_per_batch = 5) {
+  if (is.null(batches)) {
+    batches <- rep("__all__", length(sample_types))
+  }
+  if (is.null(injection_order)) {
+    injection_order <- seq_along(sample_types)
+  }
   if (is.null(qc_flagged)) {
     qc_flagged <- rep(FALSE, length(sample_types))
   }
   qc_flagged[is.na(qc_flagged)] <- FALSE
+
+  spread_per_batch <- function(idx) {
+    picked <- unlist(lapply(split(idx, batches[idx]), function(batch_idx) {
+      batch_idx <- batch_idx[order(injection_order[batch_idx])]
+      k <- min(n_per_batch, length(batch_idx))
+      batch_idx[unique(round(seq(1, length(batch_idx), length.out = k)))]
+    }), use.names = FALSE)
+    sort(picked)
+  }
 
   if (!is.null(qc_type)) {
     canonical <- c(sqc = "sQC", ltqc = "ltQC")
@@ -113,17 +151,17 @@ select_retgroup_qc_idx <- function(sample_types, qc_flagged = NULL, qc_type = NU
         forced_type, length(idx), forced_type, min_qc
       ), call. = FALSE)
     }
-    return(list(idx = idx, type = forced_type, forced = TRUE))
+    return(list(idx = spread_per_batch(idx), type = forced_type, forced = TRUE))
   }
 
   idx <- which(sample_types == "sQC" & !qc_flagged)
   if (length(idx) >= min_qc) {
-    return(list(idx = idx, type = "sQC", forced = FALSE))
+    return(list(idx = spread_per_batch(idx), type = "sQC", forced = FALSE))
   }
 
   ltqc_idx <- which(sample_types == "ltQC" & !qc_flagged)
   if (length(ltqc_idx) >= min_qc) {
-    return(list(idx = ltqc_idx, type = "ltQC", forced = FALSE))
+    return(list(idx = spread_per_batch(ltqc_idx), type = "ltQC", forced = FALSE))
   }
 
   stop(
@@ -143,6 +181,13 @@ select_retgroup_qc_idx <- function(sample_types, qc_flagged = NULL, qc_type = NU
 #' @param out_dir Group's output directory (e.g. output/RP_POS).
 #' @param sample_types Character vector of `sample_type` values, one per
 #'   file, in the same order as files in `xdata`.
+#' @param batches,injection_order Character/numeric vectors, same
+#'   length/order as `sample_types` -- passed through to
+#'   `select_retgroup_qc_idx()`'s per-batch subsampling. NULL (default)
+#'   treats every file as one batch/input order, same as that function's
+#'   own defaults -- fine for a hand-built call, but a real run should
+#'   always pass the sheet's actual `batch`/`injection_order` columns so
+#'   every batch is represented in the subsample.
 #' @param qc_flagged Logical vector, same length/order as `sample_types` --
 #'   `check_qc_quality()`'s `qc_flagged` column, if available. Excluded from
 #'   the sQC/ltQC selection below (same reasoning as
@@ -163,14 +208,19 @@ select_retgroup_qc_idx <- function(sample_types, qc_flagged = NULL, qc_type = NU
 #'   required for the search to run at all -- also the bar for sQC to count
 #'   as "enough" on its own before falling back to ltQC instead. Same
 #'   meaning/convention as select_ipo_subset()'s.
+#' @param n_per_batch Max QC files per batch to actually search against --
+#'   see `select_retgroup_qc_idx()`. Every DoE evaluation re-aligns every
+#'   file passed in from scratch, so this is the main lever on search cost;
+#'   5 matches the reference pipeline's own per-batch sample size.
 #' @param fresh If TRUE, ignore (and delete) any cached result from a prior
 #'   run and re-optimize from scratch -- same flag/meaning as
 #'   run_ipo_optimization()'s.
 #' @return A list(obiwarp = xcms::ObiwarpParam, density_bounds = list(bw=,
 #'   binSize=)) -- see align_and_correspond() for how these get applied.
-run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged = NULL, qc_type = NULL,
+run_retgroup_optimization <- function(xdata, out_dir, sample_types, batches = NULL, injection_order = NULL,
+                                       qc_flagged = NULL, qc_type = NULL,
                                        n_slaves = default_worker_count(),
-                                       min_qc = 2, fresh = FALSE) {
+                                       min_qc = 2, n_per_batch = 5, fresh = FALSE) {
   params_path <- file.path(out_dir, "retgroup_params.rds")
 
   if (fresh) {
@@ -195,7 +245,9 @@ run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged =
 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-  qc_selection <- select_retgroup_qc_idx(sample_types, qc_flagged, qc_type, min_qc)
+  qc_selection <- select_retgroup_qc_idx(
+    sample_types, batches, injection_order, qc_flagged, qc_type, min_qc, n_per_batch
+  )
   qc_idx <- qc_selection$idx
   if (qc_selection$forced) {
     message(sprintf("qc_type forced to %s for retention-time/correspondence optimization.", qc_selection$type))
@@ -206,9 +258,11 @@ run_retgroup_optimization <- function(xdata, out_dir, sample_types, qc_flagged =
     ))
   }
 
+  effective_batches <- if (is.null(batches)) rep("__all__", length(sample_types)) else batches
   message(sprintf(
-    "Restricting retention-time/correspondence search to %d QC file(s) (out of %d total)...",
-    length(qc_idx), length(sample_types)
+    "Restricting retention-time/correspondence search to %d QC file(s) across %d batch(es) (up to %d/batch, out of %d %s file(s) total)...",
+    length(qc_idx), length(unique(effective_batches[qc_idx])),
+    n_per_batch, sum(sample_types == qc_selection$type, na.rm = TRUE), qc_selection$type
   ))
   qc_xdata <- xcms::filterFile(xdata, file = qc_idx)
   qc_sample_types <- sample_types[qc_idx]

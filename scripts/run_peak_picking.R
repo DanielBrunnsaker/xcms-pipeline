@@ -191,7 +191,9 @@ for (group_name in names(groups)) {
 
   message(sprintf("\n--- Optimizing retention-time/correspondence params for group: %s ---", group_name))
   retgroup_params <- run_retgroup_optimization(
-    xdata, out_dir, ordered_sheet$sample_type, qc_flagged = ordered_sheet$qc_flagged,
+    xdata, out_dir, ordered_sheet$sample_type,
+    batches = ordered_sheet$batch, injection_order = ordered_sheet$injection_order,
+    qc_flagged = ordered_sheet$qc_flagged,
     qc_type = if (tolower(retgroup_qc_type) == "auto") NULL else retgroup_qc_type,
     fresh = ipo_fresh
   )

@@ -79,8 +79,13 @@ docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_pi
 Each group's retention-time/correspondence optimization normally picks sQC
 over ltQC automatically (falling back only if sQC is too thin) -- a
 "QC batch coverage" printout at the start of each group shows how many
-batches each type actually covers. Pass `sQC` or `ltQC` as `[retgroup_qc_type]`
-to force one instead of relying on the automatic pick:
+batches each type actually covers. It searches against up to 5 files per
+batch (spread evenly across `injection_order`), not every QC file in the
+group -- every search evaluation re-aligns whichever files are passed in
+from scratch, so this keeps a large study's search cost from scaling with
+its total QC count while still representing every batch. Pass `sQC` or
+`ltQC` as `[retgroup_qc_type]` to force one instead of relying on the
+automatic pick:
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 5 false ltQC
 ```

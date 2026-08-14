@@ -110,3 +110,42 @@ test_that("select_retgroup_qc_idx errors on an unrecognized forced qc_type", {
   types <- c("sQC", "sQC")
   expect_error(select_retgroup_qc_idx(types, qc_type = "blank", min_qc = 2), 'must be "sQC" or "ltQC"')
 })
+
+test_that("select_retgroup_qc_idx caps at n_per_batch, spread across injection_order", {
+  types <- rep("sQC", 10)
+  batches <- rep("B1", 10)
+  order <- 1:10
+  result <- select_retgroup_qc_idx(types, batches, order, min_qc = 2, n_per_batch = 4)
+  expect_equal(result$idx, c(1, 4, 7, 10))
+})
+
+test_that("select_retgroup_qc_idx keeps every file in a batch smaller than n_per_batch", {
+  types <- rep("sQC", 3)
+  batches <- rep("B1", 3)
+  order <- 1:3
+  result <- select_retgroup_qc_idx(types, batches, order, min_qc = 2, n_per_batch = 5)
+  expect_equal(result$idx, c(1, 2, 3))
+})
+
+test_that("select_retgroup_qc_idx subsamples each batch independently, representing every batch", {
+  types <- rep("sQC", 20)
+  batches <- rep(c("B1", "B2"), each = 10)
+  order <- 1:20
+  result <- select_retgroup_qc_idx(types, batches, order, min_qc = 2, n_per_batch = 3)
+  # 3 from each batch's own timeline (round(seq(1, 10, length.out = 3)) ==
+  # c(1, 6, 10) -- R's round-half-to-even rounds 5.5 up to 6), not 3 total
+  # across the whole group.
+  expect_equal(result$idx, c(1, 6, 10, 11, 16, 20))
+  expect_true(all(c("B1", "B2") %in% batches[result$idx]))
+})
+
+test_that("select_retgroup_qc_idx subsampling ignores rows excluded by qc_flagged/type before spreading", {
+  types <- c("sQC", "sQC", "sQC", "sQC", "ltQC")
+  batches <- rep("B1", 5)
+  order <- 1:5
+  flagged <- c(FALSE, TRUE, FALSE, FALSE, FALSE)
+  # Non-flagged sQC rows are 1, 3, 4 -- spread of those 3 at n_per_batch=2
+  # should pick the first and last of that subset, not raw positions 1/2.
+  result <- select_retgroup_qc_idx(types, batches, order, qc_flagged = flagged, min_qc = 2, n_per_batch = 2)
+  expect_equal(result$idx, c(1, 4))
+})
