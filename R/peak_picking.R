@@ -433,12 +433,35 @@ pick_peaks_cached <- function(filepaths, centwave_param, spectrum_modes, cache_p
 #' @param retgroup_params Optional result of `run_retgroup_optimization()`
 #'   (obiwarp params + density bandwidth/bin-size) -- falls back to xcms's
 #'   plain defaults for both if omitted.
+#' @param n_workers Worker count for all three steps below. Defaults to the
+#'   pipeline's normal `default_worker_count()`, but this runs against the
+#'   FULL group (every sample/blank/QC, not the small subsample the earlier
+#'   centWave/retgroup searches use) and `adjustRtime()`/`fillChromPeaks()`
+#'   both re-read raw file data per worker -- memory-heavy enough that a
+#'   caller processing a large group may want to pass a lower number (see
+#'   scripts/run_peak_picking.R). Only runs once each (not repeatedly like
+#'   a DoE search), so a lower count mainly costs one linear slowdown, not
+#'   a compounding one.
 #' @return The aligned, corresponded, gap-filled XCMSnExp.
-align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL) {
+align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, n_workers = default_worker_count()) {
   obiwarp_param <- if (!is.null(retgroup_params)) retgroup_params$obiwarp else xcms::ObiwarpParam()
 
+  # adjustRtime()'s ObiwarpParam method doesn't accept BPPARAM at all in
+  # this xcms snapshot (see with_bp_workers()) -- it silently falls back to
+  # whichever backend is registered as the session-wide default instead.
+  # Passing `bpparam` below still throttles groupChromPeaks()/
+  # fillChromPeaks() (which do accept it), but adjustRtime() specifically
+  # needs the default itself temporarily lowered to actually respect
+  # n_workers. Restored on exit so peak-picking/retgroup-optimization
+  # elsewhere in the pipeline keep the full worker count -- this only
+  # throttles align_and_correspond() itself.
+  align_bpparam <- bp_workers(workers = n_workers)
+  old_default <- BiocParallel::bpparam()
+  BiocParallel::register(align_bpparam)
+  on.exit(BiocParallel::register(old_default), add = TRUE)
+
   message("Running adjustRtime()...")
-  xdata <- with_bp_workers(xcms::adjustRtime, xdata, param = obiwarp_param)
+  xdata <- with_bp_workers(xcms::adjustRtime, xdata, param = obiwarp_param, bpparam = align_bpparam)
 
   density_param <- if (!is.null(retgroup_params)) {
     xcms::PeakDensityParam(
@@ -452,10 +475,10 @@ align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL) {
   }
 
   message("Running groupChromPeaks()...")
-  xdata <- with_bp_workers(xcms::groupChromPeaks, xdata, param = density_param)
+  xdata <- with_bp_workers(xcms::groupChromPeaks, xdata, param = density_param, bpparam = align_bpparam)
 
   message("Running fillChromPeaks()...")
-  with_bp_workers(xcms::fillChromPeaks, xdata, param = xcms::ChromPeakAreaParam())
+  with_bp_workers(xcms::fillChromPeaks, xdata, param = xcms::ChromPeakAreaParam(), bpparam = align_bpparam)
 }
 
 #' Combine an aligned XCMSnExp's feature definitions and per-sample values

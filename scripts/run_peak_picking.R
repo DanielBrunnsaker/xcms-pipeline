@@ -199,7 +199,11 @@ for (group_name in names(groups)) {
   )
 
   message(sprintf("\n--- Aligning and grouping peaks for group: %s ---", group_name))
-  xdata <- align_and_correspond(xdata, ordered_sheet$sample_type, retgroup_params)
+  # Lower worker count than the pipeline's default -- this step runs
+  # against the full group (not a small subsample) with memory-heavy
+  # per-worker raw-file reads (adjustRtime()/fillChromPeaks()); see
+  # align_and_correspond()'s docstring.
+  xdata <- align_and_correspond(xdata, ordered_sheet$sample_type, retgroup_params, n_workers = 8)
   feature_table <- build_feature_table(xdata, ordered_sheet$sample_label)
   save_peak_picking_outputs(xdata, feature_table, out_dir, ordered_sheet$sample_label)
 }

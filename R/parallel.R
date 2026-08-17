@@ -38,26 +38,42 @@ default_worker_count <- function(headroom = 2) {
 #' Build the BiocParallel backend for peak-picking/alignment steps —
 #' separate from IPO2's own loop, which is controlled by the session-wide
 #' default registered below.
-bp_workers <- function() {
-  BiocParallel::SnowParam(workers = default_worker_count(), progressbar = TRUE)
+#'
+#' @param workers Worker count. Defaults to `default_worker_count()`;
+#'   callers processing the full (not subsampled) file set against
+#'   memory-heavy steps -- see `align_and_correspond()` -- may want fewer.
+bp_workers <- function(workers = default_worker_count()) {
+  BiocParallel::SnowParam(workers = workers, progressbar = TRUE)
 }
 
-#' Call an xcms function with `BPPARAM = bp_workers()`, falling back to no
+#' Call an xcms function with `BPPARAM = bpparam`, falling back to no
 #' BPPARAM if that method doesn't accept one -- some xcms methods in this
 #' Bioconductor devel snapshot don't take BPPARAM despite the docs (e.g.
 #' adjustRtime's ObiwarpParam method). Adapts at call time rather than
 #' hardcoding which ones do.
 #'
+#' The fallback path does NOT run single-threaded, despite what it used to
+#' say here -- a method that rejects BPPARAM entirely still parallelizes,
+#' just via whatever's registered as the *session-wide default* backend
+#' (see R/parallel.R's own registration at the bottom of this file) rather
+#' than `bpparam`. A caller that needs to control worker count even for
+#' that fallback case (e.g. `align_and_correspond()`, for memory reasons)
+#' has to temporarily re-register the default around the call instead of
+#' relying on this function's `bpparam` argument alone.
+#'
 #' @param fn The xcms function to call (e.g. xcms::adjustRtime).
 #' @param ... Arguments to pass (not including BPPARAM).
-with_bp_workers <- function(fn, ...) {
+#' @param bpparam BiocParallel backend to request. Defaults to
+#'   `bp_workers()` (the pipeline's normal worker count).
+with_bp_workers <- function(fn, ..., bpparam = bp_workers()) {
   tryCatch(
-    fn(..., BPPARAM = bp_workers()),
+    fn(..., BPPARAM = bpparam),
     error = function(e) {
       msg <- conditionMessage(e)
       if (grepl("unused argument", msg, fixed = TRUE) && grepl("BPPARAM", msg, fixed = TRUE)) {
         warning(
-          "This xcms call doesn't accept BPPARAM in this environment; running without it (single-threaded).",
+          "This xcms call doesn't accept BPPARAM in this environment; falling back to the ",
+          "session-registered default backend instead of the worker count requested here.",
           call. = FALSE
         )
         fn(...)

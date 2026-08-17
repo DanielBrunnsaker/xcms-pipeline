@@ -95,6 +95,11 @@ By default, parallel steps use all cores minus 2. Override with
 ```
 docker run --rm -e XCMS_PIPELINE_CORES=8 -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data
 ```
+The final alignment/correspondence/gap-filling step (`align_and_correspond()`)
+always runs at a fixed 8 workers regardless of that setting -- it's the one
+step that runs against the *full* group (every sample/blank/QC, not a small
+subsample) with memory-heavy per-worker raw-file reads, so it's capped
+independent of how many cores the rest of the pipeline uses.
 
 ## Output
 
