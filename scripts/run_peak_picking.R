@@ -8,7 +8,7 @@
 # like the centWave search.
 #
 # Usage:
-#   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size] [ipo_fresh] [retgroup_qc_type]
+#   Rscript scripts/run_peak_picking.R <folder> [ipo_scope] [ipo_subset_size] [ipo_fresh] [retgroup_qc_type] [center_sample]
 #
 # <folder>: same one passed to generate_sample_sheet.R (or any folder with a
 # hand-curated metadata/sample_sheet.xlsx meeting validate_sample_sheet()'s
@@ -41,6 +41,15 @@
 # non-flagged files -- see the "QC batch coverage" printout at the start of
 # each group for whether sQC/ltQC actually cover every batch.
 #
+# [center_sample] (default "qc"): how each group's obiwarp alignment
+# reference file ("center sample") is chosen.
+# - qc: a non-flagged sQC (falling back to ltQC) closest to the group's
+#   median injection_order -- see select_center_sample().
+# - middle: xcms's own default -- whichever file sits at the group's
+#   positional median index, with no regard for data quality. An escape
+#   hatch to compare against or fall back to if the qc-based pick is ever
+#   suspect.
+#
 # Output per group, under <folder>/output/<column>_<polarity>/:
 #   - picked_peaks.rds       cached pick_peaks() result (per batch, under
 #                            <batch>/, in batch scope) -- an interrupted run
@@ -64,7 +73,8 @@ if (length(args) < 1) {
   stop(
     paste(
       "Usage: Rscript scripts/run_peak_picking.R <folder> [ipo_scope: global|batch]",
-      "[ipo_subset_size] [ipo_fresh: true|false] [retgroup_qc_type: auto|sQC|ltQC]"
+      "[ipo_subset_size] [ipo_fresh: true|false] [retgroup_qc_type: auto|sQC|ltQC]",
+      "[center_sample: qc|middle]"
     ),
     call. = FALSE
   )
@@ -74,6 +84,7 @@ ipo_scope <- if (length(args) >= 2) args[2] else "global"
 ipo_subset_size <- if (length(args) >= 3) as.integer(args[3]) else 4
 ipo_fresh <- if (length(args) >= 4) as.logical(args[4]) else FALSE
 retgroup_qc_type <- if (length(args) >= 5) args[5] else "auto"
+center_sample_mode <- if (length(args) >= 6) tolower(args[6]) else "qc"
 
 if (!ipo_scope %in% c("global", "batch")) {
   stop('ipo_scope must be "global" or "batch"', call. = FALSE)
@@ -86,6 +97,9 @@ if (is.na(ipo_fresh)) {
 }
 if (!tolower(retgroup_qc_type) %in% c("auto", "sqc", "ltqc")) {
   stop('retgroup_qc_type must be "auto", "sQC", or "ltQC"', call. = FALSE)
+}
+if (!center_sample_mode %in% c("qc", "middle")) {
+  stop('center_sample must be "qc" or "middle"', call. = FALSE)
 }
 
 sheet_path <- file.path(folder, "metadata", "sample_sheet.xlsx")
@@ -203,7 +217,11 @@ for (group_name in names(groups)) {
   # against the full group (not a small subsample) with memory-heavy
   # per-worker raw-file reads (adjustRtime()/fillChromPeaks()); see
   # align_and_correspond()'s docstring.
-  xdata <- align_and_correspond(xdata, ordered_sheet$sample_type, retgroup_params, n_workers = 8)
+  xdata <- align_and_correspond(
+    xdata, ordered_sheet$sample_type, retgroup_params,
+    injection_order = ordered_sheet$injection_order, qc_flagged = ordered_sheet$qc_flagged,
+    center_sample_mode = center_sample_mode, n_workers = 8
+  )
   feature_table <- build_feature_table(xdata, ordered_sheet$sample_label)
   save_peak_picking_outputs(xdata, feature_table, out_dir, ordered_sheet$sample_label)
 }

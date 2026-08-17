@@ -230,3 +230,62 @@ test_that("pick_peaks_cached with fresh = TRUE ignores and overwrites an existin
   )
   expect_equal(calls, 2)
 })
+
+test_that("select_center_sample picks the non-flagged sQC closest to the median injection_order", {
+  types <- c("sQC", "sQC", "sQC", "ltQC")
+  order <- c(1, 5, 10, 3)
+  # median(c(1,5,10,3)) == 4 -- order 5 (idx 2) is closer to 4 than 1 or 10.
+  result <- select_center_sample(types, order)
+  expect_equal(result$idx, 2)
+  expect_equal(result$type, "sQC")
+})
+
+test_that("select_center_sample falls back to ltQC when no non-flagged sQC is available", {
+  types <- c("sQC", "ltQC", "ltQC")
+  flagged <- c(TRUE, FALSE, FALSE)
+  order <- c(5, 1, 8)
+  # median(c(5,1,8)) == 5 -- order 8 (idx 3) is closer to 5 than order 1 is.
+  result <- select_center_sample(types, order, qc_flagged = flagged)
+  expect_equal(result$idx, 3)
+  expect_equal(result$type, "ltQC")
+})
+
+test_that("select_center_sample returns NULL when neither tier has any file", {
+  types <- c("Sample", "Sample", "Blank")
+  order <- c(1, 2, 3)
+  result <- select_center_sample(types, order)
+  expect_null(result)
+})
+
+test_that("select_center_sample excludes qc_flagged rows before picking", {
+  types <- c("sQC", "sQC")
+  flagged <- c(TRUE, FALSE)
+  order <- c(1, 2)
+  result <- select_center_sample(types, order, qc_flagged = flagged)
+  expect_equal(result$idx, 2)
+})
+
+test_that("select_center_sample uses the WHOLE group's median injection_order, not just the candidate pool's", {
+  types <- c("sQC", "sQC", "Sample", "Sample", "Sample")
+  order <- c(1, 2, 10, 11, 12)
+  # Whole-group median(c(1,2,10,11,12)) == 10 -- sQC idx 2 (order 2) is
+  # closer to 10 than idx 1 (order 1). A candidate-only median (median of
+  # just the two sQC values, 1.5) would wrongly prefer idx 1 instead.
+  result <- select_center_sample(types, order)
+  expect_equal(result$idx, 2)
+})
+
+test_that("select_center_sample treats a missing qc_flagged as nothing flagged", {
+  types <- rep("sQC", 2)
+  order <- c(1, 2)
+  expect_no_error(result <- select_center_sample(types, order))
+  expect_true(result$idx %in% c(1, 2))
+})
+
+test_that("align_and_correspond errors on an invalid center_sample_mode", {
+  skip_if_not_installed("xcms")
+  expect_error(
+    align_and_correspond(NULL, character(0), center_sample_mode = "bogus"),
+    'center_sample_mode must be "qc" or "middle"'
+  )
+})

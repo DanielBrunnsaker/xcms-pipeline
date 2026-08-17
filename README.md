@@ -67,7 +67,8 @@ docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_pi
 ```
 Optional args: `[ipo_scope]` (`global` default, or `batch` for a separate IPO
 optimization per batch), `[ipo_subset_size]` (default `4`), `[ipo_fresh]`
-(default `false`), `[retgroup_qc_type]` (default `auto`):
+(default `false`), `[retgroup_qc_type]` (default `auto`), `[center_sample]`
+(default `qc`):
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 8
 ```
@@ -88,6 +89,15 @@ its total QC count while still representing every batch. Pass `sQC` or
 automatic pick:
 ```
 docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 5 false ltQC
+```
+The obiwarp alignment step's reference file ("center sample" -- the one every
+other file gets warped against) is picked the same way by default (`qc`): a
+non-flagged sQC (falling back to ltQC) closest to the group's median
+`injection_order`, logged so it's traceable. Pass `middle` as `[center_sample]`
+to use xcms's own default instead -- whichever file sits at the positional
+median index, with no regard for quality:
+```
+docker run --rm -v /path/to/data:/data xcms-pipeline Rscript scripts/run_peak_picking.R /data batch 5 false auto middle
 ```
 
 By default, parallel steps use all cores minus 2. Override with

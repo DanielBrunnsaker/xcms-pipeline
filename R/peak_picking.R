@@ -410,6 +410,53 @@ pick_peaks_cached <- function(filepaths, centwave_param, spectrum_modes, cache_p
   xdata
 }
 
+#' Pick a single well-characterized, temporally-central file to use as
+#' adjustRtime()'s ObiwarpParam `centerSample` -- the file every other file
+#' gets warped against. xcms's own default (when `centerSample` isn't set)
+#' just picks whichever file sits at the group's positional median index,
+#' with no regard for data quality at all -- see `align_and_correspond()`'s
+#' call site for why that's risky.
+#'
+#' Tiered like `select_retgroup_qc_idx()`/`select_ipo_subset()`: non-flagged
+#' sQC preferred, falling back to non-flagged ltQC if sQC isn't available.
+#' Within the chosen tier, picks whichever candidate's `injection_order` is
+#' closest to the WHOLE group's median injection_order (not just the
+#' candidate pool's own median) -- minimizes the worst-case time-distance
+#' from the reference to any file in the group, same rationale as xcms's
+#' own middle-sample default, just restricted to files already vetted by
+#' `check_qc_quality()`.
+#'
+#' @param sample_types,injection_order Same length/order -- one value per
+#'   file, in the same order as files in the `xdata` this index will be
+#'   used against.
+#' @param qc_flagged Logical vector, same length/order -- excluded from
+#'   selection. NULL or NA per-element means "not flagged".
+#' @return list(idx = 1-based integer index into `sample_types` (matching
+#'   `ObiwarpParam`'s `centerSample` slot), type = "sQC" or "ltQC"), or NULL
+#'   if neither tier has any non-flagged file (caller should fall back to
+#'   xcms's own default in that case).
+select_center_sample <- function(sample_types, injection_order, qc_flagged = NULL) {
+  if (is.null(qc_flagged)) {
+    qc_flagged <- rep(FALSE, length(sample_types))
+  }
+  qc_flagged[is.na(qc_flagged)] <- FALSE
+
+  median_order <- stats::median(injection_order)
+  closest_to_median <- function(idx) idx[which.min(abs(injection_order[idx] - median_order))]
+
+  sqc_idx <- which(sample_types == "sQC" & !qc_flagged)
+  if (length(sqc_idx) > 0) {
+    return(list(idx = closest_to_median(sqc_idx), type = "sQC"))
+  }
+
+  ltqc_idx <- which(sample_types == "ltQC" & !qc_flagged)
+  if (length(ltqc_idx) > 0) {
+    return(list(idx = closest_to_median(ltqc_idx), type = "ltQC"))
+  }
+
+  NULL
+}
+
 #' Turns individually-picked peaks into one aligned feature table: aligns
 #' retention times, groups into cross-sample features, fills gaps. Same
 #' steps as the reference pipeline (adjustRtime -> groupChromPeaks ->
@@ -433,6 +480,22 @@ pick_peaks_cached <- function(filepaths, centwave_param, spectrum_modes, cache_p
 #' @param retgroup_params Optional result of `run_retgroup_optimization()`
 #'   (obiwarp params + density bandwidth/bin-size) -- falls back to xcms's
 #'   plain defaults for both if omitted.
+#' @param injection_order,qc_flagged Same length/order as `sample_types` --
+#'   passed to `select_center_sample()` to pick a known-good, temporally-
+#'   central `centerSample` for obiwarp instead of xcms's own
+#'   quality-blind positional-median default. `injection_order` MUST be the
+#'   sheet's actual chronological rank (`scan_mzml_files()`'s
+#'   `injection_order` column -- acquisition-time-based when available,
+#'   filename-order fallback otherwise), never array position/row index --
+#'   unlike `select_retgroup_qc_idx()`, this function has no `seq_along()`
+#'   fallback, so passing something that isn't real injection order would
+#'   silently produce a "closest to the median" pick that isn't actually
+#'   temporally central. Only consulted when `center_sample_mode = "qc"`.
+#' @param center_sample_mode `"qc"` (default): use `select_center_sample()`
+#'   as above. `"middle"`: skip it entirely and leave `centerSample` at
+#'   whatever `retgroup_params`/xcms's own quality-blind positional-median
+#'   default would otherwise apply -- an escape hatch to compare against or
+#'   fall back to if the QC-based pick is ever suspect.
 #' @param n_workers Worker count for `groupChromPeaks()`/`fillChromPeaks()`.
 #'   Defaults to the pipeline's normal `default_worker_count()`, but this
 #'   runs against the FULL group (every sample/blank/QC, not the small
@@ -442,8 +505,36 @@ pick_peaks_cached <- function(filepaths, centwave_param, spectrum_modes, cache_p
 #'   single-threaded regardless of this argument -- see the comment above
 #'   that call.
 #' @return The aligned, corresponded, gap-filled XCMSnExp.
-align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, n_workers = default_worker_count()) {
+align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, injection_order = NULL,
+                                  qc_flagged = NULL, center_sample_mode = "qc",
+                                  n_workers = default_worker_count()) {
+  if (!center_sample_mode %in% c("qc", "middle")) {
+    stop('center_sample_mode must be "qc" or "middle"', call. = FALSE)
+  }
+
   obiwarp_param <- if (!is.null(retgroup_params)) retgroup_params$obiwarp else xcms::ObiwarpParam()
+
+  if (center_sample_mode == "middle") {
+    message("center_sample_mode = \"middle\": using xcms's own positional-median center sample (quality-blind).")
+  } else if (!is.null(injection_order)) {
+    center <- select_center_sample(sample_types, injection_order, qc_flagged)
+    if (!is.null(center)) {
+      message(sprintf(
+        "Using file %d (%s, injection_order %s) as the obiwarp center sample -- closest-to-median-time non-flagged %s.",
+        center$idx, sample_types[center$idx], injection_order[center$idx], center$type
+      ))
+      # Direct slot assignment, not a centerSample<- setter -- works
+      # regardless of whether obiwarp_param came from retgroup_params (its
+      # other slots already set) or a bare default xcms::ObiwarpParam(),
+      # without needing to know xcms's exact accessor-generic name.
+      obiwarp_param@centerSample <- center$idx
+    } else {
+      message(
+        "No non-flagged sQC/ltQC available to pick an obiwarp center sample from -- ",
+        "falling back to xcms's own positional-median default."
+      )
+    }
+  }
 
   # adjustRtime()'s ObiwarpParam method doesn't accept BPPARAM at all in
   # this xcms snapshot (see with_bp_workers()) -- it silently falls back to
