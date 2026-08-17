@@ -433,35 +433,44 @@ pick_peaks_cached <- function(filepaths, centwave_param, spectrum_modes, cache_p
 #' @param retgroup_params Optional result of `run_retgroup_optimization()`
 #'   (obiwarp params + density bandwidth/bin-size) -- falls back to xcms's
 #'   plain defaults for both if omitted.
-#' @param n_workers Worker count for all three steps below. Defaults to the
-#'   pipeline's normal `default_worker_count()`, but this runs against the
-#'   FULL group (every sample/blank/QC, not the small subsample the earlier
-#'   centWave/retgroup searches use) and `adjustRtime()`/`fillChromPeaks()`
-#'   both re-read raw file data per worker -- memory-heavy enough that a
-#'   caller processing a large group may want to pass a lower number (see
-#'   scripts/run_peak_picking.R). Only runs once each (not repeatedly like
-#'   a DoE search), so a lower count mainly costs one linear slowdown, not
-#'   a compounding one.
+#' @param n_workers Worker count for `groupChromPeaks()`/`fillChromPeaks()`.
+#'   Defaults to the pipeline's normal `default_worker_count()`, but this
+#'   runs against the FULL group (every sample/blank/QC, not the small
+#'   subsample the earlier centWave/retgroup searches use), so a caller
+#'   processing a large group may want to pass a lower number (see
+#'   scripts/run_peak_picking.R). `adjustRtime()` itself always runs
+#'   single-threaded regardless of this argument -- see the comment above
+#'   that call.
 #' @return The aligned, corresponded, gap-filled XCMSnExp.
 align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, n_workers = default_worker_count()) {
   obiwarp_param <- if (!is.null(retgroup_params)) retgroup_params$obiwarp else xcms::ObiwarpParam()
 
   # adjustRtime()'s ObiwarpParam method doesn't accept BPPARAM at all in
   # this xcms snapshot (see with_bp_workers()) -- it silently falls back to
-  # whichever backend is registered as the session-wide default instead.
-  # Passing `bpparam` below still throttles groupChromPeaks()/
-  # fillChromPeaks() (which do accept it), but adjustRtime() specifically
-  # needs the default itself temporarily lowered to actually respect
-  # n_workers. Restored on exit so peak-picking/retgroup-optimization
-  # elsewhere in the pipeline keep the full worker count -- this only
-  # throttles align_and_correspond() itself.
-  align_bpparam <- bp_workers(workers = n_workers)
-  old_default <- BiocParallel::bpparam()
-  BiocParallel::register(align_bpparam)
-  on.exit(BiocParallel::register(old_default), add = TRUE)
-
+  # whichever backend is registered as the session-wide default instead, so
+  # controlling its parallelism means temporarily changing that default, not
+  # just passing a smaller bpparam like groupChromPeaks()/fillChromPeaks()
+  # below. An earlier attempt at this captured the live default via
+  # bpparam() and handed it back to register() afterward to restore it --
+  # that round-trip is implicated in a real crash (BiocParallel's
+  # "wrong args for environment subassignment" bug, previously diagnosed in
+  # this project as MulticoreParam breaking on this platform -- see
+  # R/parallel.R's header comment -- despite SnowParam being requested
+  # throughout). SerialParam() sidesteps that whole bug class outright (no
+  # forking/sockets, so MulticoreParam can't be involved even indirectly),
+  # and is restored via a *fresh* bp_workers() call rather than a
+  # round-tripped captured object -- matching every other registration in
+  # this codebase (all one-shot, never round-tripped) -- so
+  # peak-picking/retgroup-optimization for the next group still get full
+  # parallelism.
   message("Running adjustRtime()...")
-  xdata <- with_bp_workers(xcms::adjustRtime, xdata, param = obiwarp_param, bpparam = align_bpparam)
+  BiocParallel::register(BiocParallel::SerialParam())
+  xdata <- tryCatch(
+    xcms::adjustRtime(xdata, param = obiwarp_param),
+    finally = BiocParallel::register(bp_workers())
+  )
+
+  align_bpparam <- bp_workers(workers = n_workers)
 
   density_param <- if (!is.null(retgroup_params)) {
     xcms::PeakDensityParam(
