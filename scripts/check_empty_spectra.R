@@ -31,6 +31,7 @@ if (length(args) < 1) {
 }
 target <- args[1]
 
+source("R/parallel.R")
 library(xcms)
 
 #' Check one picked_peaks.rds for completely empty spectra.
@@ -81,26 +82,42 @@ if (dir.exists(target)) {
   if (length(cache_paths) == 0) {
     stop(sprintf("No picked_peaks.rds found anywhere under: %s", target), call. = FALSE)
   }
-  message(sprintf("Found %d picked_peaks.rds file(s) under %s -- checking each...", length(cache_paths), target))
+  message(sprintf(
+    "Found %d picked_peaks.rds file(s) under %s -- checking each in parallel (%d workers)...",
+    length(cache_paths), target, default_worker_count()
+  ))
+
+  # Each check re-reads that batch's raw files from disk (peaksCount() on an
+  # on-disk-backed XCMSnExp isn't free -- the cached .rds only holds
+  # metadata/picked peaks, not spectrum data), so this is genuinely
+  # I/O-heavy across potentially thousands of files -- parallelized across
+  # batches the same way the rest of the pipeline parallelizes raw reads.
+  # bp_workers()'s SnowParam has progressbar = TRUE, so this alone gives a
+  # live progress bar without any extra code.
+  check_one <- function(cache_path) {
+    label <- basename(dirname(cache_path)) # batch scope: <batch>; global scope: <group>
+    detail <- tryCatch(check_cache(cache_path), error = function(e) conditionMessage(e))
+    list(cache_path = cache_path, label = label, detail = detail)
+  }
+  results <- BiocParallel::bplapply(cache_paths, check_one, BPPARAM = bp_workers())
 
   flagged <- character(0)
-  for (cache_path in cache_paths) {
-    label <- basename(dirname(cache_path)) # batch scope: <batch>; global scope: <group>
-    detail <- tryCatch(check_cache(cache_path), error = function(e) {
-      message(sprintf("  %s: FAILED to check (%s)", label, conditionMessage(e)))
-      NULL
-    })
-    if (is.null(detail)) next
+  for (res in results) {
+    if (is.character(res$detail)) {
+      message(sprintf("  %s: FAILED to check (%s)", res$label, res$detail))
+      next
+    }
+    detail <- res$detail
     if (nrow(detail) == 0) {
-      message(sprintf("  %s: clean (no empty spectra)", label))
+      message(sprintf("  %s: clean (no empty spectra)", res$label))
     } else {
       n_files_affected <- length(unique(detail$file))
       n_trailing <- sum(detail$is_trailing)
       message(sprintf(
         "  %s: %d empty spectrum/spectra across %d file(s) (%d trailing) -- %s",
-        label, nrow(detail), n_files_affected, n_trailing, paste(unique(detail$file), collapse = ", ")
+        res$label, nrow(detail), n_files_affected, n_trailing, paste(unique(detail$file), collapse = ", ")
       ))
-      flagged <- c(flagged, cache_path)
+      flagged <- c(flagged, res$cache_path)
     }
   }
 
