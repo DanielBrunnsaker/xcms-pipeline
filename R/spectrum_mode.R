@@ -45,12 +45,35 @@ get_spectrum_modes <- function(sheet) {
 #' centroid files, since that's unusual and applying centroiding
 #' indiscriminately to already-centroided spectra can distort them.
 #'
+#' Also strips completely empty spectra (zero data points -- not "few
+#' peaks", nothing at all) via `MSnbase::filterEmptySpectra()`. A trailing
+#' empty spectrum crashes `adjustRtime(ObiwarpParam())`'s profile-matrix
+#' construction with "subscript out of bounds" -- a real, still-unfixed
+#' xcms bug (github.com/sneumann/xcms/issues/366) in `.insertColumn()`'s
+#' handling of that case, confirmed against xcms's current source, not a
+#' data-quality problem with the file otherwise. An xcms maintainer's
+#' recommended workaround for exactly this crash, confirmed by another user
+#' in the same thread, is filtering empty spectra out before peak
+#' picking/alignment -- applied here, once, for every raw-data read in the
+#' pipeline (both peak-picking and QC checking share this function), rather
+#' than requiring a caller-by-caller fix.
+#'
 #' @param filepaths Character vector of mzML file paths.
 #' @param spectrum_modes Character vector ("profile"/"centroid"/NA), one per
 #'   file, in the same order as `filepaths`.
-#' @return An OnDiskMSnExp, centroided if needed.
+#' @return An OnDiskMSnExp, centroided if needed, with empty spectra removed.
 read_raw_data <- function(filepaths, spectrum_modes) {
   raw_data <- MSnbase::readMSData(filepaths, mode = "onDisk")
+
+  n_before <- length(raw_data)
+  raw_data <- MSnbase::filterEmptySpectra(raw_data)
+  n_removed <- n_before - length(raw_data)
+  if (n_removed > 0) {
+    message(sprintf(
+      "Removed %d completely empty spectrum/spectra (of %d) -- known adjustRtime()/obiwarp crash trigger, see read_raw_data().",
+      n_removed, n_before
+    ))
+  }
 
   modes_present <- unique(stats::na.omit(spectrum_modes))
   if (length(modes_present) > 1) {
