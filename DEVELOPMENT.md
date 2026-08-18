@@ -28,6 +28,9 @@ integration works, though — only a real pipeline run confirms that.
 - `IPO::optimizeRetGroup()` (retention-time/correspondence optimization) is a
   first integration of the legacy `IPO` package — less battle-tested than the
   centWave (`IPO2`) side. Watch it closely on new data.
-- Retgroup search doesn't checkpoint mid-run yet, unlike centWave's.
-- Batch-scope peak picking isn't cached — an interrupted run redoes it (IPO
-  itself still resumes from cache).
+- Retgroup search doesn't checkpoint mid-run yet, unlike centWave's -- an
+  interrupted run re-does the whole DoE search from scratch (the final result
+  is still cached to `retgroup_params.rds` once it completes). A safe
+  round-boundary checkpoint is feasible (see `retGroupCalcExperimentsCluster`
+  in the `IPO` package source) but not yet implemented -- deliberately held
+  off since it'd only ever be a warm-start, not a true resume.
