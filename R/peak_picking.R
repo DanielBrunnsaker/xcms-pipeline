@@ -457,6 +457,122 @@ select_center_sample <- function(sample_types, injection_order, qc_flagged = NUL
   NULL
 }
 
+#' Align every non-reference file in `xdata` against `centerSample`
+#' individually -- one `xcms::adjustRtime()` call per (reference, candidate)
+#' pair -- instead of xcms's own single bulk call over every file at once,
+#' excluding any file whose isolated alignment throws an error rather than
+#' letting one bad file crash the whole group.
+#'
+#' xcms's obiwarp implementation (profMat()'s zero-column insertion for
+#' gaps in a file's own scan-time sequence) has real, longstanding,
+#' still-open edge-case bugs (github.com/sneumann/xcms/issues/366, #242)
+#' that a small number of files can trigger ("subscript out of bounds" or
+#' similar) -- and xcms's own adjustRtime() treats ANY single failure as
+#' fatal for the ENTIRE batch (BiocParallel's default stop-on-error
+#' behavior abandons every other file too, not just the one that failed).
+#' This isolates the blast radius to just the offending file(s).
+#'
+#' Mathematically equivalent to xcms's bulk call for every file that
+#' succeeds -- confirmed against xcms's own `.obiwarp()` source: the
+#' reference's precomputed profile (`profCtr`/`centerObject`) is built
+#' ONLY from the reference file and the param settings, and each
+#' non-reference file's alignment only ever depends on (that file, the
+#' fixed reference profile, the params) -- never on which other files are
+#' present in the batch. Running one pair at a time changes fault
+#' isolation, not the underlying computation. The one real cost: the
+#' reference's profile matrix gets rebuilt once per candidate file instead
+#' of once total -- xcms's public `adjustRtime()` gives no way to inject a
+#' precomputed reference profile -- a real but minor inefficiency next to
+#' the per-pair alignment computation itself, which dominates either way.
+#'
+#' @param xdata XCMSnExp with peaks already picked, not yet adjusted.
+#' @param obiwarp_param xcms::ObiwarpParam with `centerSample` already set
+#'   to a concrete index into `xdata` (not left unset/auto).
+#' @param n_workers Worker count for parallelizing across candidate files
+#'   -- each task is a small 2-file alignment, much lighter than xcms's
+#'   own all-files-at-once dispatch.
+#' @return list(
+#'   xdata = XCMSnExp containing the reference plus every file that
+#'     aligned successfully, `adjustedRtime()` populated, in the SAME
+#'     relative order as the input `xdata`;
+#'   kept_idx = integer indices into the ORIGINAL `xdata` (ascending, same
+#'     relative order) that survived -- use this to filter any other
+#'     per-file vector (sample_type, sample_label, ...) the caller is
+#'     tracking alongside `xdata`, so nothing downstream goes out of sync;
+#'   log = data.frame, one row per file in the ORIGINAL `xdata` --
+#'     INCLUDING the reference and every surviving file, not just excluded
+#'     ones: file, status ("reference"/"aligned"/"excluded"), reason (NA
+#'     unless excluded, in which case the actual error text).
+#' )
+robust_adjust_rtime <- function(xdata, obiwarp_param, n_workers = default_worker_count()) {
+  filepaths <- xcms::fileNames(xdata)
+  n_files <- length(filepaths)
+  # Direct slot access, not centerSample() -- that generic exists in xcms's
+  # namespace but isn't exported (confirmed: xcms::centerSample() errors
+  # with "not an exported object"), same reason align_and_correspond()
+  # sets it via @centerSample <- rather than a setter.
+  center_idx <- obiwarp_param@centerSample
+  candidate_idx <- setdiff(seq_len(n_files), center_idx)
+
+  align_one <- function(i) {
+    pair_idx <- sort(c(center_idx, i))
+    pair_xdata <- xcms::filterFile(xdata, file = pair_idx)
+    pair_param <- obiwarp_param
+    # centerSample must point at the reference's position WITHIN this
+    # 2-file subset, not its index in the original full group.
+    pair_param@centerSample <- match(center_idx, pair_idx)
+
+    result <- tryCatch(xcms::adjustRtime(pair_xdata, param = pair_param), error = function(e) e)
+    if (inherits(result, "error")) {
+      return(list(ok = FALSE, reason = conditionMessage(result)))
+    }
+    adjusted <- xcms::adjustedRtime(result)
+    list(
+      ok = TRUE,
+      candidate_rt = adjusted[[match(i, pair_idx)]],
+      reference_rt = adjusted[[match(center_idx, pair_idx)]]
+    )
+  }
+
+  message(sprintf(
+    "Aligning %d file(s) individually against the reference (%d worker(s)) -- isolates any single-file obiwarp failure instead of crashing the whole group...",
+    length(candidate_idx), n_workers
+  ))
+  results <- BiocParallel::bplapply(candidate_idx, align_one, BPPARAM = bp_workers(workers = n_workers))
+
+  reference_rt <- NULL
+  adjusted_rt <- vector("list", n_files)
+  log_rows <- vector("list", n_files)
+  kept_idx <- integer(0)
+
+  for (k in seq_along(candidate_idx)) {
+    i <- candidate_idx[k]
+    res <- results[[k]]
+    if (res$ok) {
+      adjusted_rt[[i]] <- res$candidate_rt
+      if (is.null(reference_rt)) reference_rt <- res$reference_rt
+      kept_idx <- c(kept_idx, i)
+      log_rows[[i]] <- data.frame(file = basename(filepaths[i]), status = "aligned", reason = NA_character_, stringsAsFactors = FALSE)
+    } else {
+      message(sprintf("Excluding %s from alignment: %s", basename(filepaths[i]), res$reason))
+      log_rows[[i]] <- data.frame(file = basename(filepaths[i]), status = "excluded", reason = res$reason, stringsAsFactors = FALSE)
+    }
+  }
+
+  if (is.null(reference_rt)) {
+    stop("Every file failed to align against the reference -- nothing usable survived.", call. = FALSE)
+  }
+
+  adjusted_rt[[center_idx]] <- reference_rt
+  log_rows[[center_idx]] <- data.frame(file = basename(filepaths[center_idx]), status = "reference", reason = NA_character_, stringsAsFactors = FALSE)
+  kept_idx <- sort(c(kept_idx, center_idx))
+
+  final_xdata <- xcms::filterFile(xdata, file = kept_idx)
+  xcms::adjustedRtime(final_xdata) <- adjusted_rt[kept_idx]
+
+  list(xdata = final_xdata, kept_idx = kept_idx, log = do.call(rbind, log_rows))
+}
+
 #' Turns individually-picked peaks into one aligned feature table: aligns
 #' retention times, groups into cross-sample features, fills gaps. Same
 #' steps as the reference pipeline (adjustRtime -> groupChromPeaks ->
@@ -492,32 +608,56 @@ select_center_sample <- function(sample_types, injection_order, qc_flagged = NUL
 #'   silently produce a "closest to the median" pick that isn't actually
 #'   temporally central. Only consulted when `center_sample_mode = "qc"`.
 #' @param center_sample_mode `"qc"` (default): use `select_center_sample()`
-#'   as above. `"middle"`: skip it entirely and leave `centerSample` at
-#'   whatever `retgroup_params`/xcms's own quality-blind positional-median
-#'   default would otherwise apply -- an escape hatch to compare against or
-#'   fall back to if the QC-based pick is ever suspect.
-#' @param n_workers Worker count for `groupChromPeaks()`/`fillChromPeaks()`.
-#'   Defaults to the pipeline's normal `default_worker_count()`, but this
-#'   runs against the FULL group (every sample/blank/QC, not the small
-#'   subsample the earlier centWave/retgroup searches use), so a caller
-#'   processing a large group may want to pass a lower number (see
-#'   scripts/run_peak_picking.R). `adjustRtime()` itself always runs
-#'   single-threaded regardless of this argument -- see the comment above
-#'   that call.
-#' @return The aligned, corresponded, gap-filled XCMSnExp.
+#'   as above. `"middle"`: use xcms's own quality-blind positional-median
+#'   file instead -- an escape hatch to compare against or fall back to if
+#'   the QC-based pick is ever suspect. Either way, `centerSample` always
+#'   ends up set to a concrete index (never left unset for xcms to
+#'   auto-resolve internally) -- `robust_adjust_rtime()` needs a definite
+#'   reference up front, unlike a single bulk `adjustRtime()` call.
+#' @param n_workers Worker count for `robust_adjust_rtime()`'s per-file
+#'   alignment and for `groupChromPeaks()`/`fillChromPeaks()`. Defaults to
+#'   the pipeline's normal `default_worker_count()`, but this runs against
+#'   the FULL group (every sample/blank/QC, not the small subsample the
+#'   earlier centWave/retgroup searches use), so a caller processing a
+#'   large group may want to pass a lower number (see
+#'   scripts/run_peak_picking.R).
+#' @param out_dir If given, `robust_adjust_rtime()`'s per-file log (which
+#'   files aligned, which were excluded and why) is written to
+#'   `alignment_log.csv` there. NULL skips writing it (only the console
+#'   message).
+#' @return list(
+#'   xdata = the aligned, corresponded, gap-filled XCMSnExp -- may contain
+#'     FEWER files than the input `xdata` if any were excluded, see below;
+#'   kept_idx = integer indices into the ORIGINAL input `xdata`/
+#'     `sample_types` (ascending, same relative order) that made it into
+#'     the returned `xdata` -- a caller tracking other per-file vectors
+#'     alongside `xdata` (sample_label, batch, ...) MUST filter them by
+#'     this too, or they'll go out of sync with the returned `xdata`.
+#' )
 align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, injection_order = NULL,
                                   qc_flagged = NULL, center_sample_mode = "qc",
-                                  n_workers = default_worker_count()) {
+                                  n_workers = default_worker_count(), out_dir = NULL) {
   if (!center_sample_mode %in% c("qc", "middle")) {
     stop('center_sample_mode must be "qc" or "middle"', call. = FALSE)
   }
 
   obiwarp_param <- if (!is.null(retgroup_params)) retgroup_params$obiwarp else xcms::ObiwarpParam()
 
+  # xcms's own default (an unset centerSample) resolves to
+  # floor(median(1:length(fileNames(object)))) -- replicated explicitly
+  # here (rather than left unset) since robust_adjust_rtime() needs a
+  # concrete reference index up front, not something resolved lazily
+  # inside a bulk adjustRtime() call we're no longer making.
+  positional_middle <- function() floor(stats::median(seq_along(sample_types)))
+
   if (center_sample_mode == "middle") {
-    message("center_sample_mode = \"middle\": using xcms's own positional-median center sample (quality-blind).")
-  } else if (!is.null(injection_order)) {
-    center <- select_center_sample(sample_types, injection_order, qc_flagged)
+    obiwarp_param@centerSample <- positional_middle()
+    message(sprintf(
+      "center_sample_mode = \"middle\": using xcms's own positional-median center sample (quality-blind) -- file %d.",
+      obiwarp_param@centerSample
+    ))
+  } else {
+    center <- if (!is.null(injection_order)) select_center_sample(sample_types, injection_order, qc_flagged) else NULL
     if (!is.null(center)) {
       message(sprintf(
         "Using file %d (%s, injection_order %s) as the obiwarp center sample -- closest-to-median-time non-flagged %s.",
@@ -529,37 +669,35 @@ align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, in
       # without needing to know xcms's exact accessor-generic name.
       obiwarp_param@centerSample <- center$idx
     } else {
-      message(
-        "No non-flagged sQC/ltQC available to pick an obiwarp center sample from -- ",
-        "falling back to xcms's own positional-median default."
-      )
+      obiwarp_param@centerSample <- positional_middle()
+      message(sprintf(
+        "No non-flagged sQC/ltQC available to pick an obiwarp center sample from -- falling back to the positional-median file (%d).",
+        obiwarp_param@centerSample
+      ))
     }
   }
 
-  # adjustRtime()'s ObiwarpParam method doesn't accept BPPARAM at all in
-  # this xcms snapshot (see with_bp_workers()) -- it silently falls back to
-  # whichever backend is registered as the session-wide default instead, so
-  # controlling its parallelism means temporarily changing that default, not
-  # just passing a smaller bpparam like groupChromPeaks()/fillChromPeaks()
-  # below. An earlier attempt at this captured the live default via
-  # bpparam() and handed it back to register() afterward to restore it --
-  # that round-trip is implicated in a real crash (BiocParallel's
-  # "wrong args for environment subassignment" bug, previously diagnosed in
-  # this project as MulticoreParam breaking on this platform -- see
-  # R/parallel.R's header comment -- despite SnowParam being requested
-  # throughout). SerialParam() sidesteps that whole bug class outright (no
-  # forking/sockets, so MulticoreParam can't be involved even indirectly),
-  # and is restored via a *fresh* bp_workers() call rather than a
-  # round-tripped captured object -- matching every other registration in
-  # this codebase (all one-shot, never round-tripped) -- so
-  # peak-picking/retgroup-optimization for the next group still get full
-  # parallelism.
-  message("Running adjustRtime()...")
-  BiocParallel::register(BiocParallel::SerialParam())
-  xdata <- tryCatch(
-    xcms::adjustRtime(xdata, param = obiwarp_param),
-    finally = BiocParallel::register(bp_workers())
-  )
+  align_result <- robust_adjust_rtime(xdata, obiwarp_param, n_workers = n_workers)
+  xdata <- align_result$xdata
+  # Keep sample_types in sync with xdata -- it may now have fewer files
+  # than sample_types was originally built for (see kept_idx in the
+  # docstring); PeakDensityParam(sampleGroups = ...) below needs a vector
+  # the same length as xdata's actual file count, not the original one.
+  sample_types <- sample_types[align_result$kept_idx]
+
+  if (!is.null(out_dir)) {
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+    log_path <- file.path(out_dir, "alignment_log.csv")
+    write.csv(align_result$log, log_path, row.names = FALSE)
+    message(sprintf("Saved per-file alignment outcome (aligned/excluded + reason) to: %s", log_path))
+  }
+  n_excluded <- sum(align_result$log$status == "excluded")
+  if (n_excluded > 0) {
+    message(sprintf(
+      "WARNING: %d file(s) excluded from this group's alignment/feature table due to obiwarp failures -- see alignment_log.csv for which and why.",
+      n_excluded
+    ))
+  }
 
   align_bpparam <- bp_workers(workers = n_workers)
 
@@ -578,7 +716,9 @@ align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, in
   xdata <- with_bp_workers(xcms::groupChromPeaks, xdata, param = density_param, bpparam = align_bpparam)
 
   message("Running fillChromPeaks()...")
-  with_bp_workers(xcms::fillChromPeaks, xdata, param = xcms::ChromPeakAreaParam(), bpparam = align_bpparam)
+  xdata <- with_bp_workers(xcms::fillChromPeaks, xdata, param = xcms::ChromPeakAreaParam(), bpparam = align_bpparam)
+
+  list(xdata = xdata, kept_idx = align_result$kept_idx)
 }
 
 #' Combine an aligned XCMSnExp's feature definitions and per-sample values

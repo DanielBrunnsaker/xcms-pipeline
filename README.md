@@ -109,9 +109,11 @@ The final alignment/correspondence/gap-filling step (`align_and_correspond()`)
 runs against the *full* group (every sample/blank/QC, not a small subsample),
 so it always uses a fixed 8 workers for `groupChromPeaks()`/`fillChromPeaks()`
 regardless of that setting -- independent of how many cores the rest of the
-pipeline uses. `adjustRtime()` within that same step always runs
-single-threaded, not parallel at all -- a memory-safety fix, see
-`align_and_correspond()`'s comments.
+pipeline uses. Retention-time alignment (obiwarp) aligns each file against
+the reference individually rather than in one bulk call, so a single file
+that trips a known, still-open xcms obiwarp bug
+(github.com/sneumann/xcms/issues/366, #242) gets excluded instead of
+crashing the whole group -- see `alignment_log.csv` below.
 
 ## Output
 
@@ -145,6 +147,8 @@ output/<column>_<polarity>/
                                 auto-invalidated if files/params changed
   retgroup_params.rds           optimized alignment/correspondence params
   retgroup_history.rds          full optimizeRetGroup() result
+  alignment_log.csv             one row per file: aligned/excluded/
+                                reference, and why if excluded
   peaks/xdata.rds               full aligned XCMSnExp object
   peaks/peak_table.csv          per-peak table, with sample_name, is_filled,
                                 ms_level, feature columns added

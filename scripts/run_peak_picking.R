@@ -215,13 +215,19 @@ for (group_name in names(groups)) {
   message(sprintf("\n--- Aligning and grouping peaks for group: %s ---", group_name))
   # Lower worker count than the pipeline's default -- this step runs
   # against the full group (not a small subsample) with memory-heavy
-  # per-worker raw-file reads (adjustRtime()/fillChromPeaks()); see
-  # align_and_correspond()'s docstring.
-  xdata <- align_and_correspond(
+  # per-worker raw-file reads (groupChromPeaks()/fillChromPeaks());
+  # see align_and_correspond()'s docstring.
+  align_result <- align_and_correspond(
     xdata, ordered_sheet$sample_type, retgroup_params,
     injection_order = ordered_sheet$injection_order, qc_flagged = ordered_sheet$qc_flagged,
-    center_sample_mode = center_sample_mode, n_workers = 8
+    center_sample_mode = center_sample_mode, n_workers = 8, out_dir = out_dir
   )
+  xdata <- align_result$xdata
+  # Some files may have been excluded (obiwarp alignment failure -- see
+  # alignment_log.csv) -- filter ordered_sheet the same way so every
+  # per-file vector used below stays in sync with xdata's actual files.
+  ordered_sheet <- ordered_sheet[align_result$kept_idx, , drop = FALSE]
+
   feature_table <- build_feature_table(xdata, ordered_sheet$sample_label)
   save_peak_picking_outputs(xdata, feature_table, out_dir, ordered_sheet$sample_label)
 }
