@@ -513,6 +513,12 @@ robust_adjust_rtime <- function(xdata, obiwarp_param, n_workers = default_worker
   # sets it via @centerSample <- rather than a setter.
   center_idx <- obiwarp_param@centerSample
   candidate_idx <- setdiff(seq_len(n_files), center_idx)
+  # Expected per-file spectrum count, from the ORIGINAL xdata -- used below
+  # to catch a result that "succeeded" (no error) but is silently
+  # malformed, before it ever reaches the final bulk adjustedRtime<-
+  # assignment where a bad vector can't be traced back to which file caused
+  # it (see this function's docstring / align_and_correspond()'s history).
+  spectra_per_file <- tabulate(xcms::fromFile(xdata), nbins = n_files)
 
   align_one <- function(i) {
     pair_idx <- sort(c(center_idx, i))
@@ -527,11 +533,30 @@ robust_adjust_rtime <- function(xdata, obiwarp_param, n_workers = default_worker
       return(list(ok = FALSE, reason = conditionMessage(result)))
     }
     adjusted <- xcms::adjustedRtime(result)
-    list(
-      ok = TRUE,
-      candidate_rt = adjusted[[match(i, pair_idx)]],
-      reference_rt = adjusted[[match(center_idx, pair_idx)]]
-    )
+    candidate_rt <- adjusted[[match(i, pair_idx)]]
+    reference_rt <- adjusted[[match(center_idx, pair_idx)]]
+
+    # A malformed-but-non-erroring result: same underlying obiwarp
+    # fragility, just surfacing as a silently-wrong-length vector instead
+    # of a thrown error. Caught here (per file, with a clear reason) rather
+    # than later at the combined-object assignment, where xcms's own
+    # internal chromPeaks-adjustment step fails with an opaque
+    # "'y' must be one longer than 'x'" that can't be attributed to any
+    # one file.
+    if (length(candidate_rt) != spectra_per_file[i]) {
+      return(list(ok = FALSE, reason = sprintf(
+        "adjusted rtime length mismatch (got %d values, expected %d spectra)",
+        length(candidate_rt), spectra_per_file[i]
+      )))
+    }
+    if (length(reference_rt) != spectra_per_file[center_idx]) {
+      return(list(ok = FALSE, reason = sprintf(
+        "reference's adjusted rtime length mismatch in this pairing (got %d values, expected %d spectra)",
+        length(reference_rt), spectra_per_file[center_idx]
+      )))
+    }
+
+    list(ok = TRUE, candidate_rt = candidate_rt, reference_rt = reference_rt)
   }
 
   message(sprintf(
