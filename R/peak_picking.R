@@ -639,13 +639,20 @@ robust_adjust_rtime <- function(xdata, obiwarp_param, n_workers = default_worker
 #'   ends up set to a concrete index (never left unset for xcms to
 #'   auto-resolve internally) -- `robust_adjust_rtime()` needs a definite
 #'   reference up front, unlike a single bulk `adjustRtime()` call.
-#' @param n_workers Worker count for `robust_adjust_rtime()`'s per-file
-#'   alignment and for `groupChromPeaks()`/`fillChromPeaks()`. Defaults to
-#'   the pipeline's normal `default_worker_count()`, but this runs against
-#'   the FULL group (every sample/blank/QC, not the small subsample the
-#'   earlier centWave/retgroup searches use), so a caller processing a
-#'   large group may want to pass a lower number (see
+#' @param n_workers Worker count for `groupChromPeaks()`/`fillChromPeaks()`.
+#'   Defaults to the pipeline's normal `default_worker_count()`, but this
+#'   runs against the FULL group (every sample/blank/QC, not the small
+#'   subsample the earlier centWave/retgroup searches use), so a caller
+#'   processing a large group may want to pass a lower number (see
 #'   scripts/run_peak_picking.R).
+#' @param alignment_n_workers Worker count for `robust_adjust_rtime()`'s
+#'   per-file alignment specifically -- kept separate from `n_workers`
+#'   because each of its workers holds a full copy of `xdata` for the
+#'   whole step (a naive closure capture, not xcms's own chunked
+#'   parallelism), so it has a different memory profile than
+#'   `groupChromPeaks()`/`fillChromPeaks()` and may need a lower number on
+#'   a large group even when those are fine at the default. Defaults to
+#'   `n_workers` if not given.
 #' @param out_dir If given, `robust_adjust_rtime()`'s per-file log (which
 #'   files aligned, which were excluded and why) is written to
 #'   `alignment_log.csv` there. NULL skips writing it (only the console
@@ -661,7 +668,8 @@ robust_adjust_rtime <- function(xdata, obiwarp_param, n_workers = default_worker
 #' )
 align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, injection_order = NULL,
                                   qc_flagged = NULL, center_sample_mode = "qc",
-                                  n_workers = default_worker_count(), out_dir = NULL) {
+                                  n_workers = default_worker_count(), alignment_n_workers = n_workers,
+                                  out_dir = NULL) {
   if (!center_sample_mode %in% c("qc", "middle")) {
     stop('center_sample_mode must be "qc" or "middle"', call. = FALSE)
   }
@@ -702,7 +710,7 @@ align_and_correspond <- function(xdata, sample_types, retgroup_params = NULL, in
     }
   }
 
-  align_result <- robust_adjust_rtime(xdata, obiwarp_param, n_workers = n_workers)
+  align_result <- robust_adjust_rtime(xdata, obiwarp_param, n_workers = alignment_n_workers)
   xdata <- align_result$xdata
   # Keep sample_types in sync with xdata -- it may now have fewer files
   # than sample_types was originally built for (see kept_idx in the

@@ -220,7 +220,7 @@ for (group_name in names(groups)) {
   align_result <- align_and_correspond(
     xdata, ordered_sheet$sample_type, retgroup_params,
     injection_order = ordered_sheet$injection_order, qc_flagged = ordered_sheet$qc_flagged,
-    center_sample_mode = center_sample_mode, n_workers = 8, out_dir = out_dir
+    center_sample_mode = center_sample_mode, n_workers = 8, alignment_n_workers = 4, out_dir = out_dir
   )
   xdata <- align_result$xdata
   # Some files may have been excluded (obiwarp alignment failure -- see
