@@ -532,7 +532,11 @@ robust_adjust_rtime <- function(xdata, obiwarp_param, n_workers = default_worker
     if (inherits(result, "error")) {
       return(list(ok = FALSE, reason = conditionMessage(result)))
     }
-    adjusted <- xcms::adjustedRtime(result)
+    # bySample = TRUE is required here -- the default (FALSE) returns one
+    # flat vector concatenated across every spectrum in the pair, not a
+    # per-file list, which would make the [[ ]] indexing below silently
+    # pull out a single scalar instead of a per-file rtime vector.
+    adjusted <- xcms::adjustedRtime(result, bySample = TRUE)
     candidate_rt <- adjusted[[match(i, pair_idx)]]
     reference_rt <- adjusted[[match(center_idx, pair_idx)]]
 
